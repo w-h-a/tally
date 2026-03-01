@@ -1,5 +1,9 @@
  # Tally                                                                                               
 
+<div align="center">
+  <img src="./.github/assets/tally.png" alt="Tally Mascot" />
+</div>
+
 ## Problem
 
 Travis Jeffery's [proglog](https://github.com/travisjeffery/proglog) teaches the right patterns but is frozen at Go 1.13 with deprecated dependencies.
