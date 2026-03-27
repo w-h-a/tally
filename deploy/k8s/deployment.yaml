@@ -1,0 +1,60 @@
+apiVersion: apps/v1                                                                                                                                          
+kind: Deployment
+metadata:
+  name: tally
+  namespace: tally
+  labels:
+    app: tally
+    version: VERSION_PLACEHOLDER
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: tally
+  template:
+    metadata:
+      labels:
+        app: tally
+        version: VERSION_PLACEHOLDER
+    spec:
+      containers:
+        - name: tally
+          image: IMAGE_PLACEHOLDER
+          ports:
+            - name: health
+              containerPort: 8080
+            - name: grpc
+              containerPort: 9090
+          env:
+            - name: TALLY_HEALTH_PORT
+              value: "8080"
+            - name: TALLY_GRPC_PORT
+              value: "9090"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://otel-collector.otel-collector.svc.cluster.local:4317
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          securityContext:
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
