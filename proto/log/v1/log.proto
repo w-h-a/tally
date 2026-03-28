@@ -1,0 +1,62 @@
+syntax = "proto3";
+
+package log.v1;
+
+option go_package = "github.com/w-h-a/tally/proto/log/v1";
+
+service LogService {
+    rpc Produce(ProduceRequest) returns (ProduceResponse) {}
+    rpc Consume(ConsumeRequest) returns (ConsumeResponse) {}
+    rpc ProduceStream(stream ProduceStreamRequest) returns (stream ProduceStreamResponse) {}
+    rpc ConsumeStream(ConsumeStreamRequest) returns (stream ConsumeStreamResponse) {}
+    rpc GetServers(GetServersRequest) returns (GetServersResponse) {}
+}
+
+message Record {
+    bytes value = 1;
+    uint64 offset = 2;
+}
+
+message Server {
+    string id = 1;
+    string rpc_addr = 2;
+    bool is_leader = 3;
+}
+
+message ProduceRequest {
+    Record record = 1;
+}
+
+message ProduceResponse {
+    uint64 offset = 1;
+}
+
+message ConsumeRequest {
+    uint64 offset = 1;
+}
+
+message ConsumeResponse {
+    Record record = 1;
+}
+
+message ProduceStreamRequest {
+    Record record = 1;
+}
+
+message ProduceStreamResponse {
+    uint64 offset = 1;
+}
+
+message ConsumeStreamRequest {
+    uint64 offset = 1;
+}
+
+message ConsumeStreamResponse {
+    Record record = 1;
+}
+
+message GetServersRequest {}
+
+message GetServersResponse {
+    repeated Server servers = 1;
+}

@@ -11,9 +11,6 @@
 coverage.out
 coverage.html
 
-# Generated protobuf
-proto/v1/*.pb.go
-
 # IDE
 .idea/
 .vscode/

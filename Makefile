@@ -1,4 +1,4 @@
-.PHONY: tidy generate style lint test build
+.PHONY: tidy generate check-style style lint test build
 
 tidy:
 	go mod tidy
@@ -6,11 +6,15 @@ tidy:
 generate:
 	buf generate
 
+check-style:
+	@output=$$(goimports -l $$(find . -name '*.go' -not -path './proto/*')); \
+	if [ -n "$$output" ]; then echo "Files not formatted:"; echo "$$output"; exit 1; fi
+
 style:
-	goimports -l -w ./
+	goimports -l -w $(shell find . -name '*.go' -not -path './proto/*')
 
 lint:
-	staticcheck ./...
+	staticcheck $(shell go list ./... | grep -v "$(shell go list -m)/proto")
 
 test:
 	go test ./...
