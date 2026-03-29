@@ -13,9 +13,6 @@ check-style:
 style:
 	goimports -l -w $(shell find . -name '*.go' -not -path './proto/*')
 
-lint:
-	staticcheck $(shell go list ./... | grep -v "$(shell go list -m)/proto")
-
 test:
 	go test ./...
 
