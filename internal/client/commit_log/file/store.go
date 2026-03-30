@@ -7,14 +7,14 @@ import (
 )
 
 const (
+	// lenWidth is the number of bytes used to encode the record's byte count.
+	// For example, a 25-byte record is stored as: [8 bytes encoding "25"][25 bytes of data].
 	lenWidth = 8
 )
 
-var (
-	encoding = binary.BigEndian
-)
-
 // fileStore is an append-only file that persists records as length-prefixed byte slices.
+// Access is sequential: appends go to the end, reads jump to a known byte position
+// (provided by the index). Buffered file I/O suits this pattern; so, it needs bufio.Writer.
 // fileStore is NOT concurrent-safe; the caller (fileCommitLog) must synchronize access with
 // a mutex or similar mechanism.
 // Writes are buffered via bufio.Writer and are not durable until flush.
@@ -29,10 +29,15 @@ func newStore(f *os.File) (*fileStore, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	size := uint64(fi.Size())
+
+	buf := bufio.NewWriter(f)
+
 	return &fileStore{
 		file: f,
-		buf:  bufio.NewWriter(f),
-		size: uint64(fi.Size()),
+		buf:  buf,
+		size: size,
 	}, nil
 }
 
