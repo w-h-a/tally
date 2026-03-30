@@ -1,8 +1,14 @@
 package file
 
 import (
+	"encoding/binary"
+
 	commitlog "github.com/w-h-a/tally/internal/client/commit_log"
 	api "github.com/w-h-a/tally/proto/log/v1"
+)
+
+var (
+	encoding = binary.BigEndian
 )
 
 type fileCommitLog struct {
