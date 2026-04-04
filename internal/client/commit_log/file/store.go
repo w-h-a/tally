@@ -97,8 +97,12 @@ func (s *fileStore) read(pos uint64) ([]byte, error) {
 
 // close flushes the buffer and closes the underlying file.
 func (s *fileStore) close() error {
-	if err := s.buf.Flush(); err != nil {
-		return err
+	flushErr := s.buf.Flush()
+	closeErr := s.file.Close()
+
+	if flushErr != nil {
+		return flushErr
 	}
-	return s.file.Close()
+
+	return closeErr
 }

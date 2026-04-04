@@ -122,20 +122,27 @@ func (i *fileIndex) read(relOffset int64) (uint32, uint64, error) {
 // close syncs the mmap to disk, unmaps it, truncates the file to the actual
 // data size, and closes the underlying file.
 func (i *fileIndex) close() error {
+	var firstErr error
+
 	// Force mmap writes to disk synchronously.
-	if err := unix.Msync(i.mmap, unix.MS_SYNC); err != nil {
-		return err
+	if err := unix.Msync(i.mmap, unix.MS_SYNC); err != nil && firstErr == nil {
+		firstErr = err
 	}
 
 	// Release the mapping.
-	if err := unix.Munmap(i.mmap); err != nil {
-		return err
+	if err := unix.Munmap(i.mmap); err != nil && firstErr == nil {
+		firstErr = err
 	}
 
 	// Shrink the file to actual data size.
-	if err := i.file.Truncate(int64(i.size)); err != nil {
-		return err
+	if err := i.file.Truncate(int64(i.size)); err != nil && firstErr == nil {
+		firstErr = err
 	}
 
-	return i.file.Close()
+	// Close the file.
+	if err := i.file.Close(); err != nil && firstErr == nil {
+		firstErr = err
+	}
+
+	return firstErr
 }
