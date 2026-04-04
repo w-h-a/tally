@@ -3,6 +3,7 @@ package file
 import (
 	"bufio"
 	"encoding/binary"
+	"errors"
 	"os"
 )
 
@@ -12,6 +13,10 @@ const (
 	lenWidth = 8
 )
 
+var (
+	errStoreFull = errors.New("store is full")
+)
+
 // fileStore is an append-only file that persists records as length-prefixed byte slices.
 // Access is sequential: appends go to the end, reads jump to a known byte position
 // (provided by the index). Buffered file I/O suits this pattern; so, it needs bufio.Writer.
@@ -19,12 +24,13 @@ const (
 // a mutex or similar mechanism.
 // Writes are buffered via bufio.Writer and are not durable until flush.
 type fileStore struct {
-	file *os.File
-	buf  *bufio.Writer
-	size uint64
+	file     *os.File
+	buf      *bufio.Writer
+	size     uint64
+	maxBytes uint64
 }
 
-func newStore(f *os.File) (*fileStore, error) {
+func newStore(f *os.File, maxStoreBytes uint64) (*fileStore, error) {
 	fi, err := f.Stat()
 	if err != nil {
 		return nil, err
@@ -35,9 +41,10 @@ func newStore(f *os.File) (*fileStore, error) {
 	buf := bufio.NewWriter(f)
 
 	return &fileStore{
-		file: f,
-		buf:  buf,
-		size: size,
+		file:     f,
+		buf:      buf,
+		size:     size,
+		maxBytes: maxStoreBytes,
 	}, nil
 }
 
@@ -45,6 +52,10 @@ func newStore(f *os.File) (*fileStore, error) {
 // It returns the number of bytes written (including the prefix) and the
 // position at which the record starts.
 func (s *fileStore) append(bs []byte) (uint64, uint64, error) {
+	if s.size+lenWidth+uint64(len(bs)) > s.maxBytes {
+		return 0, 0, errStoreFull
+	}
+
 	pos := s.size
 
 	// binary.Write serializes uint64(len(bs)) as exactly 8 bytes (BigEndian).
