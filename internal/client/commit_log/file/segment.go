@@ -158,13 +158,12 @@ func (s *fileSegment) remove() error {
 
 // close closes the index and the store.
 func (s *fileSegment) close() error {
-	if err := s.index.close(); err != nil {
-		return err
+	indexErr := s.index.close()
+	storeErr := s.store.close()
+
+	if indexErr != nil {
+		return indexErr
 	}
 
-	if err := s.store.close(); err != nil {
-		return err
-	}
-
-	return nil
+	return storeErr
 }
