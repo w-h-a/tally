@@ -1,6 +1,7 @@
 package file
 
 import (
+	"context"
 	"encoding/binary"
 
 	commitlog "github.com/w-h-a/tally/internal/client/commit_log"
@@ -15,40 +16,40 @@ type fileCommitLog struct {
 	options commitlog.Options
 }
 
-func (cl *fileCommitLog) Append(rec *api.Record) (uint64, error) {
-	return 0, nil
-}
-
-func (cl *fileCommitLog) Read(uint64) (*api.Record, error) {
-	return nil, nil
-}
-
-func (cl *fileCommitLog) LowestOffset() (uint64, error) {
-	return 0, nil
-}
-
-func (cl *fileCommitLog) HighestOffset() (uint64, error) {
-	return 0, nil
-}
-
-func (cl *fileCommitLog) Truncate(lowest uint64) error {
-	return nil
-}
-
-func (cl *fileCommitLog) Reset() error {
-	return nil
-}
-
-func (cl *fileCommitLog) Close() error {
-	return nil
-}
-
 func NewCommitLog(opts ...commitlog.Option) (commitlog.CommitLog, error) {
 	options := commitlog.NewOptions(opts...)
 
-	cl := &fileCommitLog{
+	l := &fileCommitLog{
 		options: options,
 	}
 
-	return cl, nil
+	return l, nil
+}
+
+func (l *fileCommitLog) Append(ctx context.Context, rec *api.Record) (uint64, error) {
+	return 0, nil
+}
+
+func (l *fileCommitLog) Read(ctx context.Context, offset uint64) (*api.Record, error) {
+	return nil, nil
+}
+
+func (l *fileCommitLog) LowestOffset(ctx context.Context) (uint64, error) {
+	return 0, nil
+}
+
+func (l *fileCommitLog) HighestOffset(ctx context.Context) (uint64, error) {
+	return 0, nil
+}
+
+func (l *fileCommitLog) Truncate(ctx context.Context, lowest uint64) error {
+	return nil
+}
+
+func (l *fileCommitLog) Reset(ctx context.Context) error {
+	return nil
+}
+
+func (l *fileCommitLog) Close(ctx context.Context) error {
+	return nil
 }

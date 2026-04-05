@@ -1,6 +1,7 @@
 package commitlog
 
 import (
+	"context"
 	"errors"
 
 	api "github.com/w-h-a/tally/proto/log/v1"
@@ -11,11 +12,11 @@ var (
 )
 
 type CommitLog interface {
-	Append(rec *api.Record) (uint64, error)
-	Read(uint64) (*api.Record, error)
-	LowestOffset() (uint64, error)
-	HighestOffset() (uint64, error)
-	Truncate(lowest uint64) error
-	Reset() error
-	Close() error
+	Append(ctx context.Context, rec *api.Record) (uint64, error)
+	Read(ctx context.Context, offset uint64) (*api.Record, error)
+	LowestOffset(ctx context.Context) (uint64, error)
+	HighestOffset(ctx context.Context) (uint64, error)
+	Truncate(ctx context.Context, lowest uint64) error
+	Reset(ctx context.Context) error
+	Close(ctx context.Context) error
 }
