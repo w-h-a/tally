@@ -5,9 +5,16 @@ import "context"
 type Option func(*Options)
 
 type Options struct {
+	Location      string
 	MaxStoreBytes uint64
 	MaxIndexBytes uint64
 	Context       context.Context
+}
+
+func WithLocation(loc string) Option {
+	return func(o *Options) {
+		o.Location = loc
+	}
 }
 
 func WithMaxStoreBytes(max uint64) Option {
