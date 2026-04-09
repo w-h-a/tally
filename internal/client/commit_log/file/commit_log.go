@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	commitlog "github.com/w-h-a/tally/internal/client/commit_log"
 	api "github.com/w-h-a/tally/proto/log/v1"
@@ -29,6 +30,8 @@ type fileCommitLog struct {
 	segments      []*fileSegment
 	activeSegment *fileSegment
 	mtx           sync.RWMutex
+	cancel        context.CancelFunc
+	cleanerDone   chan struct{}
 }
 
 func NewCommitLog(opts ...commitlog.Option) (commitlog.CommitLog, error) {
@@ -47,6 +50,13 @@ func NewCommitLog(opts ...commitlog.Option) (commitlog.CommitLog, error) {
 
 	if err := l.setup(); err != nil {
 		return nil, err
+	}
+
+	if options.Retention.MaxAge > 0 || options.Retention.MaxBytes > 0 {
+		ctx, cancel := context.WithCancel(context.Background())
+		l.cancel = cancel
+		l.cleanerDone = make(chan struct{})
+		go l.cleaner(ctx)
 	}
 
 	return l, nil
@@ -118,6 +128,110 @@ func (l *fileCommitLog) setup() error {
 	return nil
 }
 
+func (l *fileCommitLog) cleaner(ctx context.Context) {
+	defer close(l.cleanerDone)
+
+	interval := l.options.Retention.Interval
+	if interval == 0 {
+		interval = time.Hour
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			l.cleanOnce(time.Now())
+		}
+	}
+}
+
+func (l *fileCommitLog) cleanOnce(now time.Time) {
+	toRemove := l.selectExpiredSegments(now)
+
+	for _, seg := range toRemove {
+		if err := seg.remove(); err != nil {
+			l.reinsertSegment(seg)
+		}
+	}
+}
+
+func (l *fileCommitLog) selectExpiredSegments(now time.Time) []*fileSegment {
+	l.mtx.Lock()
+	defer l.mtx.Unlock()
+
+	if len(l.segments) <= 1 {
+		return nil
+	}
+
+	// Work on non-active segments only. Active segment is always kept.
+	inactive := make([]*fileSegment, len(l.segments)-1)
+	copy(inactive, l.segments[:len(l.segments)-1])
+
+	expired := []*fileSegment{}
+
+	// Age-based: remove segments whose newest record is older than MaxAge.
+	if l.options.Retention.MaxAge > 0 {
+		cutoff := now.Add(-l.options.Retention.MaxAge)
+		kept := inactive[:0]
+
+		for _, seg := range inactive {
+			if seg.lastWriteAt.Before(cutoff) {
+				expired = append(expired, seg)
+				continue
+			}
+
+			kept = append(kept, seg)
+		}
+
+		// reset inactive
+		inactive = kept
+	}
+
+	// Size-based: remove oldest segments until total store size <= MaxBytes
+	if l.options.Retention.MaxBytes > 0 {
+		total := l.activeSegment.store.size
+		for _, seg := range inactive {
+			total += seg.store.size
+		}
+
+		kept := inactive[:0]
+
+		for _, seg := range inactive {
+			if total > l.options.Retention.MaxBytes {
+				total -= seg.store.size
+				expired = append(expired, seg)
+				continue
+			}
+
+			kept = append(kept, seg)
+		}
+
+		// reset inactive
+		inactive = kept
+	}
+
+	l.segments = append(inactive, l.activeSegment)
+
+	return expired
+}
+
+func (l *fileCommitLog) reinsertSegment(seg *fileSegment) {
+	l.mtx.Lock()
+	defer l.mtx.Unlock()
+
+	pos := sort.Search(len(l.segments), func(i int) bool {
+		return l.segments[i].baseOffset > seg.baseOffset
+	})
+
+	l.segments = append(l.segments, nil)
+	copy(l.segments[pos+1:], l.segments[pos:])
+	l.segments[pos] = seg
+}
+
 func (l *fileCommitLog) Append(ctx context.Context, rec *api.Record) (uint64, error) {
 	l.mtx.Lock()
 	defer l.mtx.Unlock()
@@ -176,8 +290,11 @@ func (l *fileCommitLog) Truncate(ctx context.Context, lowest uint64) error {
 
 	for _, seg := range l.segments {
 		if seg.nextOffset > seg.baseOffset && seg.nextOffset <= lowest {
-			if err := seg.remove(); err != nil && firstErr == nil {
-				firstErr = err
+			if err := seg.remove(); err != nil {
+				seg.close()
+				if firstErr == nil {
+					firstErr = err
+				}
 			}
 			continue
 		}
@@ -207,8 +324,11 @@ func (l *fileCommitLog) Reset(ctx context.Context) error {
 	var firstErr error
 
 	for _, seg := range l.segments {
-		if err := seg.remove(); err != nil && firstErr == nil {
-			firstErr = err
+		if err := seg.remove(); err != nil {
+			seg.close()
+			if firstErr == nil {
+				firstErr = err
+			}
 		}
 	}
 
@@ -223,6 +343,11 @@ func (l *fileCommitLog) Reset(ctx context.Context) error {
 }
 
 func (l *fileCommitLog) Close(ctx context.Context) error {
+	if l.cancel != nil {
+		l.cancel()
+		<-l.cleanerDone
+	}
+
 	l.mtx.Lock()
 	defer l.mtx.Unlock()
 
