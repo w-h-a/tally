@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	commitlog "github.com/w-h-a/tally/internal/client/commit_log"
 	api "github.com/w-h-a/tally/proto/log/v1"
@@ -21,11 +22,12 @@ import (
 // in the store but is unreachable via the index. The error is returned to the
 // caller.
 type fileSegment struct {
-	store      *fileStore
-	index      *fileIndex
-	baseOffset uint64
-	nextOffset uint64
-	options    commitlog.Options
+	options     commitlog.Options
+	store       *fileStore
+	index       *fileIndex
+	baseOffset  uint64
+	nextOffset  uint64
+	lastWriteAt time.Time
 }
 
 func newSegment(dir string, baseOffset uint64, options commitlog.Options) (*fileSegment, error) {
@@ -75,12 +77,23 @@ func newSegment(dir string, baseOffset uint64, options commitlog.Options) (*file
 		return nil, err
 	}
 
+	// Use the store file's last modified time for the initial lastWriteAt.
+	// For new files, this is creation time. For recovered files
+	// it reflects the last OS-level write.
+	fi, err := storeFile.Stat()
+	if err != nil {
+		store.close()
+		index.close()
+		return nil, err
+	}
+
 	return &fileSegment{
-		store:      store,
-		index:      index,
-		baseOffset: baseOffset,
-		nextOffset: nextOffset,
-		options:    options,
+		options:     options,
+		store:       store,
+		index:       index,
+		baseOffset:  baseOffset,
+		nextOffset:  nextOffset,
+		lastWriteAt: fi.ModTime(),
 	}, nil
 }
 
@@ -105,6 +118,7 @@ func (s *fileSegment) append(rec *api.Record) (uint64, error) {
 	}
 
 	s.nextOffset++
+	s.lastWriteAt = time.Now()
 
 	return absOffset, nil
 }
@@ -139,21 +153,24 @@ func (s *fileSegment) isMaxed() bool {
 	return s.store.size >= s.options.MaxStoreBytes || s.index.size >= s.options.MaxIndexBytes
 }
 
-// remove closes the segment and deletes the underlying store and index files.
+// remove deletes the underlying store and index files first, then closes handles.
+// Files are deleted before close so that on failure the segment remains
+// readable and can be retried by the cleaner. Both removes are attempted
+// regardless of individual failure.
 func (s *fileSegment) remove() error {
-	if err := s.close(); err != nil {
-		return err
+	storeErr := os.Remove(s.store.file.Name())
+	indexErr := os.Remove(s.index.file.Name())
+
+	// Best-effort close
+	if storeErr == nil && indexErr == nil {
+		s.close()
 	}
 
-	if err := os.Remove(s.store.file.Name()); err != nil {
-		return err
+	if storeErr != nil {
+		return storeErr
 	}
 
-	if err := os.Remove(s.index.file.Name()); err != nil {
-		return err
-	}
-
-	return nil
+	return indexErr
 }
 
 // close closes the index and the store.
