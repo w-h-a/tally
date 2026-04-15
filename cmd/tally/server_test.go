@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"net"
 	"testing"
 
@@ -71,6 +73,78 @@ func TestServer(t *testing.T) {
 		require.Error(t, err)
 		got := status.Code(err)
 		require.Equal(t, codes.NotFound, got)
+	})
+}
+
+func TestServerStreaming(t *testing.T) {
+	client := setupTest(t)
+
+	// Produce 10 records via stream so all streaming subtests can consume them.
+	records := make([]*api.Record, 10)
+	for i := range records {
+		records[i] = &api.Record{Value: []byte(fmt.Sprintf("record-%d", i))}
+	}
+
+	t.Run("produce 10 records via stream and verify all offsets", func(t *testing.T) {
+		// arrange
+		stream, err := client.ProduceStream(context.Background())
+		require.NoError(t, err)
+
+		// act
+		for _, rec := range records {
+			err := stream.Send(&api.ProduceStreamRequest{Record: rec})
+			require.NoError(t, err)
+		}
+
+		err = stream.CloseSend()
+		require.NoError(t, err)
+
+		// assert
+		for i := range records {
+			resp, err := stream.Recv()
+			require.NoError(t, err)
+			require.Equal(t, uint64(i), resp.Offset)
+		}
+
+		_, err = stream.Recv()
+		require.Equal(t, io.EOF, err)
+	})
+
+	t.Run("consume stream from offset 0 receives all 10 records", func(t *testing.T) {
+		// act
+		stream, err := client.ConsumeStream(context.Background(), &api.ConsumeStreamRequest{Offset: 0})
+		require.NoError(t, err)
+
+		// assert
+		for i, want := range records {
+			resp, err := stream.Recv()
+			require.NoError(t, err)
+			require.Equal(t, want.Value, resp.Record.Value)
+			require.Equal(t, uint64(i), resp.Record.Offset)
+		}
+
+		_, err = stream.Recv()
+		require.Equal(t, io.EOF, err)
+	})
+
+	t.Run("consume stream from mid-offset receives correct subset", func(t *testing.T) {
+		// arrange
+		midOffset := uint64(5)
+
+		// act
+		stream, err := client.ConsumeStream(context.Background(), &api.ConsumeStreamRequest{Offset: midOffset})
+		require.NoError(t, err)
+
+		// assert
+		for i := midOffset; i < uint64(len(records)); i++ {
+			resp, err := stream.Recv()
+			require.NoError(t, err)
+			require.Equal(t, records[i].Value, resp.Record.Value)
+			require.Equal(t, i, resp.Record.Offset)
+		}
+
+		_, err = stream.Recv()
+		require.Equal(t, io.EOF, err)
 	})
 }
 
