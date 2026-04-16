@@ -24,7 +24,30 @@ func main() {
 	healthPort := flag.Int("health-port", defaultPort, "HTTP health check port")
 	flag.Parse()
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	version := "dev"
+	if v := os.Getenv("VERSION"); v != "" {
+		version = v
+	}
+
+	ctx := context.Background()
+
+	res, err := newResource(ctx, version)
+	if err != nil {
+		slog.Error("otel resource", "error", err)
+		os.Exit(1)
+	}
+
+	shutdownTracer, err := initTracer(ctx, res)
+	if err != nil {
+		slog.Error("otel tracer", "error", err)
+		os.Exit(1)
+	}
+
+	shutdownLogger, err := initLogger(ctx, res)
+	if err != nil {
+		slog.Error("otel logger", "error", err)
+		os.Exit(1)
+	}
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", *healthPort),
@@ -33,7 +56,7 @@ func main() {
 
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Error("health server", "error", err)
+			slog.Error("health server", "error", err)
 			os.Exit(1)
 		}
 	}()
@@ -42,13 +65,20 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	<-sigCh
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := srv.Shutdown(ctx); err != nil {
-		logger.Error("shutdown", "error", err)
-		return
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		slog.Error("shutdown", "error", err)
 	}
 
-	logger.Info("shutdown complete")
+	if err := shutdownTracer(shutdownCtx); err != nil {
+		slog.Error("tracer shutdown", "error", err)
+	}
+
+	if err := shutdownLogger(shutdownCtx); err != nil {
+		slog.Error("logger shutdown", "error", err)
+	}
+
+	slog.Info("shutdown complete")
 }
