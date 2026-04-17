@@ -7,6 +7,7 @@ import (
 
 	distributedlog "github.com/w-h-a/tally/internal/service/distributed_log"
 	api "github.com/w-h-a/tally/proto/log/v1"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -22,7 +23,9 @@ type grpcServer struct {
 }
 
 func newGRPCServer(config Config) *grpc.Server {
-	srv := grpc.NewServer()
+	srv := grpc.NewServer(
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
+	)
 
 	s := &grpcServer{
 		service: config.Service,
