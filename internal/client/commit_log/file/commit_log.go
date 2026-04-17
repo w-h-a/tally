@@ -13,6 +13,10 @@ import (
 
 	commitlog "github.com/w-h-a/tally/internal/client/commit_log"
 	api "github.com/w-h-a/tally/proto/log/v1"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 var (
@@ -32,6 +36,7 @@ type fileCommitLog struct {
 	mtx           sync.RWMutex
 	cancel        context.CancelFunc
 	cleanerDone   chan struct{}
+	tracer        trace.Tracer
 }
 
 func NewCommitLog(opts ...commitlog.Option) (commitlog.CommitLog, error) {
@@ -46,6 +51,7 @@ func NewCommitLog(opts ...commitlog.Option) (commitlog.CommitLog, error) {
 		segments:      nil,
 		activeSegment: nil,
 		mtx:           sync.RWMutex{},
+		tracer:        otel.Tracer("tally/internal/client/commit_log/file"),
 	}
 
 	if err := l.setup(); err != nil {
@@ -233,19 +239,44 @@ func (l *fileCommitLog) reinsertSegment(seg *fileSegment) {
 }
 
 func (l *fileCommitLog) Append(ctx context.Context, rec *api.Record) (uint64, error) {
+	ctx, span := l.tracer.Start(ctx, "commitlog.Append")
+	defer span.End()
+
 	l.mtx.Lock()
 	defer l.mtx.Unlock()
 
+	sizeBefore := l.activeSegment.store.size
+
 	if l.activeSegment.isMaxed() {
 		if err := l.newSegmentLocked(l.activeSegment.nextOffset); err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
 			return 0, err
 		}
+
+		sizeBefore = l.activeSegment.store.size
 	}
 
-	return l.activeSegment.append(rec)
+	offset, err := l.activeSegment.append(rec)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return 0, err
+	}
+
+	span.SetAttributes(
+		attribute.Int64("commitlog.offset", int64(offset)),
+		attribute.Int64("commitlog.bytes_written", int64(l.activeSegment.store.size-sizeBefore)),
+		attribute.Int("commitlog.segment_count", len(l.segments)),
+	)
+
+	return offset, nil
 }
 
 func (l *fileCommitLog) Read(ctx context.Context, offset uint64) (*api.Record, error) {
+	ctx, span := l.tracer.Start(ctx, "commitlog.Read", trace.WithAttributes(attribute.Int64("commitlog.offset", int64(offset))))
+	defer span.End()
+
 	l.mtx.RLock()
 	defer l.mtx.RUnlock()
 
@@ -258,7 +289,14 @@ func (l *fileCommitLog) Read(ctx context.Context, offset uint64) (*api.Record, e
 		return nil, commitlog.ErrOffsetOutOfRange
 	}
 
-	return l.segments[i].read(offset)
+	rec, err := l.segments[i].read(offset)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return nil, err
+	}
+
+	return rec, nil
 }
 
 func (l *fileCommitLog) LowestOffset(ctx context.Context) (uint64, error) {
