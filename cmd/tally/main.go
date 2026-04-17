@@ -22,7 +22,6 @@ import (
 	tallyotel "github.com/w-h-a/tally/internal/util/otel"
 	api "github.com/w-h-a/tally/proto/log/v1"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
-	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"google.golang.org/grpc"
 )
 
@@ -106,7 +105,7 @@ func main() {
 
 	httpSrv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", *healthPort),
-		Handler: otelhttp.NewMiddleware("tally")(mux),
+		Handler: mux,
 	}
 
 	go func() {
