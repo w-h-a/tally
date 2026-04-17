@@ -1,4 +1,4 @@
-package main
+package health_test
 
 import (
 	"io"
@@ -7,16 +7,23 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/w-h-a/tally/internal/handler/http/health"
 )
 
 func TestHealthz(t *testing.T) {
-	srv := httptest.NewServer(newHealthMux())
+	// arrange
+	h := health.New()
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", h.Healthz)
+	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
+	// act
 	resp, err := http.Get(srv.URL + "/healthz")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
+	// assert
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	body, err := io.ReadAll(resp.Body)
@@ -26,13 +33,19 @@ func TestHealthz(t *testing.T) {
 }
 
 func TestReadyz(t *testing.T) {
-	srv := httptest.NewServer(newHealthMux())
+	// arrange
+	h := health.New()
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /readyz", h.Readyz)
+	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
+	// act
 	resp, err := http.Get(srv.URL + "/readyz")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
+	// assert
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	body, err := io.ReadAll(resp.Body)

@@ -10,6 +10,7 @@ concurrency:
 
 env:
   DOCKER_REPO_PATH: ${{ secrets.DOCKER_USERNAME }}/tally
+  DOCKER_GATEWAY_REPO_PATH: ${{ secrets.DOCKER_USERNAME }}/tally-gateway
   OTEL_EXPORTER_OTLP_ENDPOINT: "https://api.honeycomb.io"
   OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf"
   OTEL_SERVICE_NAME: "cd"
@@ -64,10 +65,10 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Docker build
+      - name: Build tally
         run: |
           otel-cli exec \
-            --name docker-build \
+            --name docker-build-tally \
             --force-trace-id $TRACE_ID \
             --attrs "service=tally,github.repository=$GITHUB_REPOSITORY,github.run_id=$GITHUB_RUN_ID,github.sha=$GITHUB_SHA,job=build_push,image_tag=${{ needs.semver_tag.outputs.new_tag }}" \
             -- docker buildx build \
@@ -75,15 +76,38 @@ jobs:
               --tag ${{ env.DOCKER_REPO_PATH }}:latest \
               .
 
-      - name: Docker push
+      - name: Build gateway
         run: |
           otel-cli exec \
-            --name docker-push \
+            --name docker-build-gateway \
+            --force-trace-id $TRACE_ID \
+            --attrs "service=tally-gateway,github.repository=$GITHUB_REPOSITORY,github.run_id=$GITHUB_RUN_ID,github.sha=$GITHUB_SHA,job=build_push,image_tag=${{ needs.semver_tag.outputs.new_tag }}" \
+            -- docker buildx build \
+              --tag ${{ env.DOCKER_GATEWAY_REPO_PATH }}:${{ needs.semver_tag.outputs.new_tag }} \
+              --tag ${{ env.DOCKER_GATEWAY_REPO_PATH }}:latest \
+              -f Dockerfile.gateway \
+              .
+
+      - name: Push tally
+        run: |
+          otel-cli exec \
+            --name docker-push-tally \
             --force-trace-id $TRACE_ID \
             --attrs "service=tally,github.repository=$GITHUB_REPOSITORY,github.run_id=$GITHUB_RUN_ID,github.sha=$GITHUB_SHA,job=build_push,image_tag=${{ needs.semver_tag.outputs.new_tag }}" \
             -- bash -c '
             docker push ${{ env.DOCKER_REPO_PATH }}:${{ needs.semver_tag.outputs.new_tag }} &&
             docker push ${{ env.DOCKER_REPO_PATH }}:latest
+          '
+
+      - name: Push gateway
+        run: |
+          otel-cli exec \
+            --name docker-push-gateway \
+            --force-trace-id $TRACE_ID \
+            --attrs "service=tally-gateway,github.repository=$GITHUB_REPOSITORY,github.run_id=$GITHUB_RUN_ID,github.sha=$GITHUB_SHA,job=build_push,image_tag=${{ needs.semver_tag.outputs.new_tag }}" \
+            -- bash -c '
+            docker push ${{ env.DOCKER_GATEWAY_REPO_PATH }}:${{ needs.semver_tag.outputs.new_tag }} &&
+            docker push ${{ env.DOCKER_GATEWAY_REPO_PATH }}:latest
           '
 
   deploy:
@@ -113,7 +137,9 @@ jobs:
           IMAGE_TAG: ${{ needs.build_push.outputs.image_tag }}
         run: |
           sed -i "s|IMAGE_PLACEHOLDER|${{ env.DOCKER_REPO_PATH }}:${IMAGE_TAG}|" deploy/k8s/deployment.yaml
-          sed -i "s|VERSION_PLACEHOLDER|${IMAGE_TAG}|" deploy/k8s/deployment.yaml
+          sed -i "s|GATEWAY_IMAGE_PLACEHOLDER|${{ env.DOCKER_GATEWAY_REPO_PATH }}:${IMAGE_TAG}|" deploy/k8s/gateway-deployment.yaml
+          sed -i "s|VERSION_PLACEHOLDER|${IMAGE_TAG}|g" deploy/k8s/deployment.yaml
+          sed -i "s|VERSION_PLACEHOLDER|${IMAGE_TAG}|g" deploy/k8s/gateway-deployment.yaml
 
       - name: Apply manifests
         run: |
@@ -123,10 +149,18 @@ jobs:
             --attrs "service=tally,github.repository=$GITHUB_REPOSITORY,github.run_id=$GITHUB_RUN_ID,github.sha=$GITHUB_SHA,job=deploy,image_tag=${{ needs.build_push.outputs.image_tag }}" \
             -- kubectl apply -f deploy/k8s/
 
-      - name: Verify rollout
+      - name: Verify tally rollout
         run: |
           otel-cli exec \
-            --name kubectl-rollout \
+            --name kubectl-rollout-tally \
             --force-trace-id $TRACE_ID \
             --attrs "service=tally,github.repository=$GITHUB_REPOSITORY,github.run_id=$GITHUB_RUN_ID,github.sha=$GITHUB_SHA,job=deploy,image_tag=${{ needs.build_push.outputs.image_tag }}" \
             -- kubectl rollout status deployment/tally -n tally --timeout=120s
+
+      - name: Verify gateway rollout
+        run: |
+          otel-cli exec \
+            --name kubectl-rollout-gateway \
+            --force-trace-id $TRACE_ID \
+            --attrs "service=tally-gateway,github.repository=$GITHUB_REPOSITORY,github.run_id=$GITHUB_RUN_ID,github.sha=$GITHUB_SHA,job=deploy,image_tag=${{ needs.build_push.outputs.image_tag }}" \
+            -- kubectl rollout status deployment/tally-gateway -n tally --timeout=120s

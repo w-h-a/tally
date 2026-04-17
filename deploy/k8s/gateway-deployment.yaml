@@ -1,10 +1,10 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: tally
+  name: tally-gateway
   namespace: tally
   labels:
-    app: tally
+    app: tally-gateway
     version: VERSION_PLACEHOLDER
 spec:
   replicas: 1
@@ -12,60 +12,49 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      app: tally
+      app: tally-gateway
   template:
     metadata:
       labels:
-        app: tally
+        app: tally-gateway
         version: VERSION_PLACEHOLDER
     spec:
       containers:
-        - name: tally
-          image: IMAGE_PLACEHOLDER
+        - name: tally-gateway
+          image: GATEWAY_IMAGE_PLACEHOLDER
           ports:
-            - name: health
+            - name: http
               containerPort: 8080
-            - name: grpc
-              containerPort: 9090
           env:
             - name: VERSION
               value: VERSION_PLACEHOLDER
-            - name: TALLY_HEALTH_PORT
+            - name: TALLY_HTTP_PORT
               value: "8080"
-            - name: TALLY_GRPC_PORT
-              value: "9090"
-            - name: TALLY_DATA_DIR
-              value: /data
+            - name: TALLY_ADDR
+              value: tally.tally.svc.cluster.local:9090
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: http://otel-collector.otel-collector.svc.cluster.local:4317
-          volumeMounts:
-            - name: data
-              mountPath: /data
           livenessProbe:
             httpGet:
               path: /healthz
-              port: health
+              port: http
             initialDelaySeconds: 5
             periodSeconds: 15
           readinessProbe:
             httpGet:
               path: /readyz
-              port: health
+              port: http
             initialDelaySeconds: 3
             periodSeconds: 10
           resources:
             requests:
-              cpu: 50m
-              memory: 64Mi
+              cpu: 25m
+              memory: 32Mi
             limits:
-              cpu: 200m
-              memory: 128Mi
+              cpu: 100m
+              memory: 64Mi
           securityContext:
             readOnlyRootFilesystem: true
             capabilities:
               drop:
                 - ALL
-      volumes:
-        - name: data
-          persistentVolumeClaim:
-            claimName: tally-data

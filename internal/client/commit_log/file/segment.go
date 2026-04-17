@@ -1,6 +1,7 @@
 package file
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -71,7 +72,7 @@ func newSegment(dir string, baseOffset uint64, options commitlog.Options) (*file
 	off, _, err := index.read(-1)
 	if err == nil {
 		nextOffset = baseOffset + uint64(off) + 1
-	} else if err != errIndexEmpty {
+	} else if !errors.Is(err, commitlog.ErrOffsetOutOfRange) {
 		store.close()
 		index.close()
 		return nil, err

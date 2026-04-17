@@ -1,4 +1,4 @@
-package main
+package grpchandler_test
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	commitlog "github.com/w-h-a/tally/internal/client/commit_log"
 	"github.com/w-h-a/tally/internal/client/commit_log/file"
+	grpchandler "github.com/w-h-a/tally/internal/handler/grpc"
 	distributedlog "github.com/w-h-a/tally/internal/service/distributed_log"
 	api "github.com/w-h-a/tally/proto/log/v1"
 	"google.golang.org/grpc"
@@ -19,7 +20,7 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 )
 
-func TestServer(t *testing.T) {
+func TestHandler(t *testing.T) {
 	client := setupTest(t)
 
 	t.Run("produce and consume a record", func(t *testing.T) {
@@ -76,7 +77,7 @@ func TestServer(t *testing.T) {
 	})
 }
 
-func TestServerStreaming(t *testing.T) {
+func TestHandlerStreaming(t *testing.T) {
 	client := setupTest(t)
 
 	// Produce 10 records via stream so all streaming subtests can consume them.
@@ -148,6 +149,18 @@ func TestServerStreaming(t *testing.T) {
 	})
 }
 
+func TestConsumeEmptyLog(t *testing.T) {
+	// arrange
+	client := setupTest(t)
+
+	// act
+	_, err := client.Consume(context.Background(), &api.ConsumeRequest{Offset: 0})
+
+	// assert
+	require.Error(t, err)
+	require.Equal(t, codes.NotFound, status.Code(err))
+}
+
 func setupTest(t *testing.T) api.LogServiceClient {
 	t.Helper()
 
@@ -160,7 +173,8 @@ func setupTest(t *testing.T) api.LogServiceClient {
 
 	service := distributedlog.New(clog)
 
-	srv := newGRPCServer(Config{Service: service})
+	srv := grpc.NewServer()
+	api.RegisterLogServiceServer(srv, grpchandler.New(service))
 
 	lis := bufconn.Listen(1024 * 1024)
 
@@ -188,7 +202,5 @@ func setupTest(t *testing.T) api.LogServiceClient {
 		conn.Close()
 	})
 
-	client := api.NewLogServiceClient(conn)
-
-	return client
+	return api.NewLogServiceClient(conn)
 }

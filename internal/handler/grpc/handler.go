@@ -1,4 +1,4 @@
-package main
+package grpchandler
 
 import (
 	"context"
@@ -7,41 +7,25 @@ import (
 
 	distributedlog "github.com/w-h-a/tally/internal/service/distributed_log"
 	api "github.com/w-h-a/tally/proto/log/v1"
-	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
-	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
-type Config struct {
-	Service *distributedlog.Service
-}
-
-type grpcServer struct {
+type Handler struct {
 	api.UnimplementedLogServiceServer
 	service *distributedlog.Service
 }
 
-func newGRPCServer(config Config) *grpc.Server {
-	srv := grpc.NewServer(
-		grpc.StatsHandler(otelgrpc.NewServerHandler()),
-	)
-
-	s := &grpcServer{
-		service: config.Service,
-	}
-
-	api.RegisterLogServiceServer(srv, s)
-
-	return srv
+func New(service *distributedlog.Service) *Handler {
+	return &Handler{service: service}
 }
 
-func (s *grpcServer) Produce(ctx context.Context, req *api.ProduceRequest) (*api.ProduceResponse, error) {
+func (h *Handler) Produce(ctx context.Context, req *api.ProduceRequest) (*api.ProduceResponse, error) {
 	if req.Record == nil {
 		return nil, status.Error(codes.InvalidArgument, "record is required")
 	}
 
-	offset, err := s.service.Append(ctx, req.Record)
+	offset, err := h.service.Append(ctx, req.Record)
 	if err != nil {
 		return nil, err
 	}
@@ -49,8 +33,8 @@ func (s *grpcServer) Produce(ctx context.Context, req *api.ProduceRequest) (*api
 	return &api.ProduceResponse{Offset: offset}, nil
 }
 
-func (s *grpcServer) Consume(ctx context.Context, req *api.ConsumeRequest) (*api.ConsumeResponse, error) {
-	rec, err := s.service.Read(ctx, req.Offset)
+func (h *Handler) Consume(ctx context.Context, req *api.ConsumeRequest) (*api.ConsumeResponse, error) {
+	rec, err := h.service.Read(ctx, req.Offset)
 	if err != nil {
 		if errors.Is(err, distributedlog.ErrOffsetOutOfRange) {
 			return nil, status.Error(codes.NotFound, err.Error())
@@ -62,7 +46,7 @@ func (s *grpcServer) Consume(ctx context.Context, req *api.ConsumeRequest) (*api
 	return &api.ConsumeResponse{Record: rec}, nil
 }
 
-func (s *grpcServer) ProduceStream(stream api.LogService_ProduceStreamServer) error {
+func (h *Handler) ProduceStream(stream api.LogService_ProduceStreamServer) error {
 	for {
 		req, err := stream.Recv()
 		if err == io.EOF || stream.Context().Err() != nil {
@@ -76,7 +60,7 @@ func (s *grpcServer) ProduceStream(stream api.LogService_ProduceStreamServer) er
 			return status.Error(codes.InvalidArgument, "record is required")
 		}
 
-		offset, err := s.service.Append(stream.Context(), req.Record)
+		offset, err := h.service.Append(stream.Context(), req.Record)
 		if err != nil {
 			return err
 		}
@@ -87,9 +71,9 @@ func (s *grpcServer) ProduceStream(stream api.LogService_ProduceStreamServer) er
 	}
 }
 
-func (s *grpcServer) ConsumeStream(req *api.ConsumeStreamRequest, stream api.LogService_ConsumeStreamServer) error {
+func (h *Handler) ConsumeStream(req *api.ConsumeStreamRequest, stream api.LogService_ConsumeStreamServer) error {
 	for offset := req.Offset; ; offset++ {
-		rec, err := s.service.Read(stream.Context(), offset)
+		rec, err := h.service.Read(stream.Context(), offset)
 		if err != nil {
 			if errors.Is(err, distributedlog.ErrOffsetOutOfRange) {
 				return nil

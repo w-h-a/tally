@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: tally-gateway
+  namespace: tally
+spec:
+  selector:
+    app: tally-gateway
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

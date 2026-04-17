@@ -24,7 +24,6 @@ const (
 
 var (
 	errIndexFull    = errors.New("index is full")
-	errIndexEmpty   = errors.New("index is empty")
 	errIndexCorrupt = errors.New("index file size it not a multiple of entry width")
 )
 
@@ -99,7 +98,7 @@ func (i *fileIndex) write(relOffset uint32, pos uint64) error {
 // Pass -1 to read the last entry.
 func (i *fileIndex) read(relOffset int64) (uint32, uint64, error) {
 	if i.size == 0 {
-		return 0, 0, errIndexEmpty
+		return 0, 0, commitlog.ErrOffsetOutOfRange
 	}
 
 	var off uint64
