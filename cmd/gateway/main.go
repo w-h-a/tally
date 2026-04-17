@@ -84,8 +84,12 @@ func main() {
 	mux.HandleFunc("GET /readyz", h.Readyz)
 
 	srv := &http.Server{
-		Addr:    fmt.Sprintf(":%d", *httpPort),
-		Handler: otelhttp.NewMiddleware("tally-gateway")(mux),
+		Addr: fmt.Sprintf(":%d", *httpPort),
+		Handler: otelhttp.NewMiddleware("tally-gateway",
+			otelhttp.WithFilter(func(r *http.Request) bool {
+				return r.URL.Path != "/healthz" && r.URL.Path != "/readyz"
+			}),
+		)(mux),
 	}
 
 	go func() {
