@@ -1,4 +1,4 @@
-package main
+package otel
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"os"
 
 	"go.opentelemetry.io/contrib/bridges/otelslog"
-	"go.opentelemetry.io/otel"
+	otelapi "go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/stdout/stdoutlog"
@@ -19,18 +19,17 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
-func newResource(ctx context.Context, version string) (*resource.Resource, error) {
+func NewResource(ctx context.Context, serviceName, version string) (*resource.Resource, error) {
 	return resource.New(ctx,
 		resource.WithAttributes(
-			semconv.ServiceName("tally"),
+			semconv.ServiceName(serviceName),
 			semconv.ServiceVersion(version),
 		),
 		resource.WithFromEnv(),
 	)
 }
 
-func initTracer(ctx context.Context, res *resource.Resource) (func(context.Context) error,
-	error) {
+func InitTracer(ctx context.Context, res *resource.Resource) (func(context.Context) error, error) {
 	var exporter sdktrace.SpanExporter
 	var err error
 
@@ -48,14 +47,13 @@ func initTracer(ctx context.Context, res *resource.Resource) (func(context.Conte
 		sdktrace.WithResource(res),
 	)
 
-	otel.SetTracerProvider(tp)
-	otel.SetTextMapPropagator(propagation.TraceContext{})
+	otelapi.SetTracerProvider(tp)
+	otelapi.SetTextMapPropagator(propagation.TraceContext{})
 
 	return tp.Shutdown, nil
 }
 
-func initLogger(ctx context.Context, res *resource.Resource) (func(context.Context) error,
-	error) {
+func InitLogger(ctx context.Context, res *resource.Resource, serviceName string) (func(context.Context) error, error) {
 	var exporter sdklog.Exporter
 	var err error
 
@@ -74,7 +72,7 @@ func initLogger(ctx context.Context, res *resource.Resource) (func(context.Conte
 	)
 
 	global.SetLoggerProvider(lp)
-	slog.SetDefault(otelslog.NewLogger("tally", otelslog.WithLoggerProvider(lp)))
+	slog.SetDefault(otelslog.NewLogger(serviceName, otelslog.WithLoggerProvider(lp)))
 
 	return lp.Shutdown, nil
 }
