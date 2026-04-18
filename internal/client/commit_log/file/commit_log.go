@@ -3,6 +3,7 @@ package file
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
@@ -286,13 +287,18 @@ func (l *fileCommitLog) Read(ctx context.Context, offset uint64) (*api.Record, e
 	}) - 1
 
 	if i < 0 {
+		span.SetAttributes(attribute.Bool("commitlog.offset_out_of_range", true))
 		return nil, commitlog.ErrOffsetOutOfRange
 	}
 
 	rec, err := l.segments[i].read(offset)
 	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
+		if !errors.Is(err, commitlog.ErrOffsetOutOfRange) {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		} else {
+			span.SetAttributes(attribute.Bool("commitlog.offset_out_of_range", true))
+		}
 		return nil, err
 	}
 
