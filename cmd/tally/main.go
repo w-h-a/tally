@@ -45,10 +45,26 @@ func main() {
 		defaultDataDir = env
 	}
 
+	defaultNodeID, _ := os.Hostname()
+	if env := os.Getenv("TALLY_NODE_ID"); env != "" {
+		defaultNodeID = env
+	}
+
+	defaultRPCAddr := ""
+	if env := os.Getenv("TALLY_RPC_ADDR"); env != "" {
+		defaultRPCAddr = env
+	}
+
 	healthPort := flag.Int("health-port", defaultHealthPort, "HTTP health check port")
 	grpcPort := flag.Int("grpc-port", defaultGRPCPort, "gRPC listen port")
 	dataDir := flag.String("data-dir", defaultDataDir, "commit log data directory")
+	nodeID := flag.String("node-id", defaultNodeID, "unique node identifier")
+	rpcAddr := flag.String("rpc-addr", defaultRPCAddr, "advertised gRPC address for peer discovery")
 	flag.Parse()
+
+	if *rpcAddr == "" {
+		*rpcAddr = fmt.Sprintf("localhost:%d", *grpcPort)
+	}
 
 	version := "dev"
 	if v := os.Getenv("VERSION"); v != "" {
@@ -81,7 +97,7 @@ func main() {
 		log.Fatalf("commit log: %v", err)
 	}
 
-	service := distributedlog.New(clog)
+	service := distributedlog.New(clog, *nodeID, *rpcAddr)
 
 	grpcSrv := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
 	api.RegisterLogServiceServer(grpcSrv, grpchandler.New(service))

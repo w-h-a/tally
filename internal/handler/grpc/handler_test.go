@@ -161,6 +161,21 @@ func TestConsumeEmptyLog(t *testing.T) {
 	require.Equal(t, codes.NotFound, status.Code(err))
 }
 
+func TestGetServers(t *testing.T) {
+	// arrange
+	client := setupTest(t)
+
+	// act
+	resp, err := client.GetServers(context.Background(), &api.GetServersRequest{})
+
+	// assert
+	require.NoError(t, err)
+	require.Len(t, resp.Servers, 1)
+	require.Equal(t, "test-node", resp.Servers[0].Id)
+	require.Equal(t, "localhost:0", resp.Servers[0].RpcAddr)
+	require.True(t, resp.Servers[0].IsLeader)
+}
+
 func setupTest(t *testing.T) api.LogServiceClient {
 	t.Helper()
 
@@ -171,7 +186,7 @@ func setupTest(t *testing.T) api.LogServiceClient {
 	)
 	require.NoError(t, err)
 
-	service := distributedlog.New(clog)
+	service := distributedlog.New(clog, "test-node", "localhost:0")
 
 	srv := grpc.NewServer()
 	api.RegisterLogServiceServer(srv, grpchandler.New(service))

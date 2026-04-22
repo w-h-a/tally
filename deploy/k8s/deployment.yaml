@@ -36,6 +36,12 @@ spec:
               value: "9090"
             - name: TALLY_DATA_DIR
               value: /data
+            - name: TALLY_NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: TALLY_RPC_ADDR
+              value: tally.tally.svc.cluster.local:9090
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: http://otel-collector.otel-collector.svc.cluster.local:4317
           volumeMounts:

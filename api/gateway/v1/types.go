@@ -20,3 +20,13 @@ type ConsumeResponse struct {
 type StreamRequest struct {
 	From uint64 `json:"from"`
 }
+
+type GetServersResponse struct {
+	Servers []ServerResponse `json:"servers"`
+}
+
+type ServerResponse struct {
+	ID       string `json:"id"`
+	RpcAddr  string `json:"rpc_addr"`
+	IsLeader bool   `json:"is_leader"`
+}

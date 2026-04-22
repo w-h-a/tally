@@ -46,6 +46,15 @@ func (h *Handler) Consume(ctx context.Context, req *api.ConsumeRequest) (*api.Co
 	return &api.ConsumeResponse{Record: rec}, nil
 }
 
+func (h *Handler) GetServers(ctx context.Context, req *api.GetServersRequest) (*api.GetServersResponse, error) {
+	servers, err := h.service.GetServers(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return &api.GetServersResponse{Servers: servers}, nil
+}
+
 func (h *Handler) ProduceStream(stream api.LogService_ProduceStreamServer) error {
 	for {
 		req, err := stream.Recv()
