@@ -10,6 +10,8 @@ services:
       - TALLY_GRPC_PORT=9090
       - TALLY_HEALTH_PORT=8081
       - TALLY_DATA_DIR=/data
+      - TALLY_NODE_ID=tally-0
+      - TALLY_RPC_ADDR=tally:9090
     volumes:
       - tally-data:/data
 

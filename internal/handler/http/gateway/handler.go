@@ -67,6 +67,25 @@ func (h *Handler) Consume(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) GetServers(w http.ResponseWriter, r *http.Request) {
+	resp, err := h.client.GetServers(r.Context(), &api.GetServersRequest{})
+	if err != nil {
+		httphandler.WriteGRPCError(w, err)
+		return
+	}
+
+	servers := make([]gatewayapi.ServerResponse, len(resp.Servers))
+	for i, s := range resp.Servers {
+		servers[i] = gatewayapi.ServerResponse{
+			ID:       s.Id,
+			RpcAddr:  s.RpcAddr,
+			IsLeader: s.IsLeader,
+		}
+	}
+
+	httphandler.WriteJSON(w, http.StatusOK, gatewayapi.GetServersResponse{Servers: servers})
+}
+
 func (h *Handler) Stream(w http.ResponseWriter, r *http.Request) {
 	var req gatewayapi.StreamRequest
 

@@ -14,11 +14,15 @@ var (
 
 type Service struct {
 	commitlog commitlog.CommitLog
+	nodeID    string
+	rpcAddr   string
 }
 
-func New(commitLog commitlog.CommitLog) *Service {
+func New(commitLog commitlog.CommitLog, nodeID string, rpcAddr string) *Service {
 	return &Service{
 		commitlog: commitLog,
+		nodeID:    nodeID,
+		rpcAddr:   rpcAddr,
 	}
 }
 
@@ -35,6 +39,16 @@ func (s *Service) Read(ctx context.Context, offset uint64) (*api.Record, error) 
 		return nil, err
 	}
 	return rec, nil
+}
+
+func (s *Service) GetServers(ctx context.Context) ([]*api.Server, error) {
+	return []*api.Server{
+		{
+			Id:       s.nodeID,
+			RpcAddr:  s.rpcAddr,
+			IsLeader: true,
+		},
+	}, nil
 }
 
 func (s *Service) Close(ctx context.Context) error {

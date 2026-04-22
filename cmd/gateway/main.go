@@ -79,6 +79,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /produce", gw.Produce)
 	mux.HandleFunc("GET /consume", gw.Consume)
+	mux.HandleFunc("GET /servers", gw.GetServers)
 	mux.HandleFunc("GET /stream", gw.Stream)
 	mux.HandleFunc("GET /healthz", h.Healthz)
 	mux.HandleFunc("GET /readyz", h.Readyz)

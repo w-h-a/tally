@@ -92,6 +92,27 @@ func TestConsumeMissingOffset(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
 
+func TestGetServers(t *testing.T) {
+	// arrange
+	srv := setupTest(t)
+	defer srv.Close()
+
+	// act
+	resp, err := http.Get(srv.URL + "/servers")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	// assert
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var got gatewayapi.GetServersResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
+	require.Len(t, got.Servers, 1)
+	require.Equal(t, "test-node", got.Servers[0].ID)
+	require.Equal(t, "localhost:0", got.Servers[0].RpcAddr)
+	require.True(t, got.Servers[0].IsLeader)
+}
+
 func TestStream(t *testing.T) {
 	// arrange
 	srv := setupTest(t)
@@ -164,7 +185,7 @@ func setupTest(t *testing.T) *httptest.Server {
 	)
 	require.NoError(t, err)
 
-	service := distributedlog.New(clog)
+	service := distributedlog.New(clog, "test-node", "localhost:0")
 
 	grpcSrv := grpc.NewServer()
 	api.RegisterLogServiceServer(grpcSrv, grpchandler.New(service))
@@ -201,6 +222,7 @@ func setupTest(t *testing.T) *httptest.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /produce", gw.Produce)
 	mux.HandleFunc("GET /consume", gw.Consume)
+	mux.HandleFunc("GET /servers", gw.GetServers)
 	mux.HandleFunc("GET /stream", gw.Stream)
 
 	return httptest.NewServer(mux)
