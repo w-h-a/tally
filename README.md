@@ -119,7 +119,31 @@ sequenceDiagram
 
 #### Discovery
 
-Coming soon!
+```mermaid
+sequenceDiagram
+    participant NS as Serf (New Node)
+    participant ES as Serf (Existing Node)
+    participant SD as serfDiscovery (Existing)
+    participant MS as MembershipService (Existing)
+    participant RC as raftConsensus (Leader)
+
+    Note over NS,ES: New node starts, joins via gossip
+    NS->>ES: serf.Join(seed addrs)
+    ES-->>NS: membership synced
+
+    ES->>SD: EventCh <- MemberJoin
+    SD->>SD: skip self, extract rpc_addr from tags
+    SD->>MS: Events() <- MemberEvent{Join, id, addr}
+    MS->>RC: AddVoter(id, addr)
+    Note over RC: Raft adds new voter
+
+    Note over NS: Node leaves gracefully
+    NS->>ES: leave intent via gossip
+    ES->>SD: EventCh <- MemberLeave
+    SD->>MS: Events() <- MemberEvent{Leave, id, addr}
+    MS->>RC: RemoveServer(id)
+    Note over RC: Raft removes server
+```
 
 ## Usage
 

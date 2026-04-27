@@ -1,4 +1,4 @@
-.PHONY: tidy generate check-style style lint test build run-tally run-gateway up down
+.PHONY: tidy generate check-style style test build run-tally run-gateway up down
 
 tidy:
 	go mod tidy
