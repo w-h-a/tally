@@ -2,6 +2,7 @@ package raft
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -173,6 +174,9 @@ func (c *raftConsensus) Apply(ctx context.Context, data []byte) (uint64, error) 
 	if err := future.Error(); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
+		if errors.Is(err, hraft.ErrNotLeader) || errors.Is(err, hraft.ErrLeadershipLost) {
+			return 0, consensus.ErrNotLeader
+		}
 		return 0, err
 	}
 

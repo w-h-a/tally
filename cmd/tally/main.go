@@ -10,12 +10,15 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
 
 	commitlog "github.com/w-h-a/tally/internal/client/commit_log"
 	"github.com/w-h-a/tally/internal/client/commit_log/file"
+	"github.com/w-h-a/tally/internal/client/consensus"
+	"github.com/w-h-a/tally/internal/client/consensus/raft"
 	grpchandler "github.com/w-h-a/tally/internal/handler/grpc"
 	"github.com/w-h-a/tally/internal/handler/http/health"
 	distributedlog "github.com/w-h-a/tally/internal/service/distributed_log"
@@ -55,11 +58,25 @@ func main() {
 		defaultRPCAddr = env
 	}
 
+	defaultRaftAddr := "127.0.0.1:0"
+	if env := os.Getenv("TALLY_RAFT_ADDR"); env != "" {
+		defaultRaftAddr = env
+	}
+
+	defaultBootstrap := true
+	if env := os.Getenv("TALLY_BOOTSTRAP"); env != "" {
+		if b, err := strconv.ParseBool(env); err == nil {
+			defaultBootstrap = b
+		}
+	}
+
 	healthPort := flag.Int("health-port", defaultHealthPort, "HTTP health check port")
 	grpcPort := flag.Int("grpc-port", defaultGRPCPort, "gRPC listen port")
 	dataDir := flag.String("data-dir", defaultDataDir, "commit log data directory")
 	nodeID := flag.String("node-id", defaultNodeID, "unique node identifier")
 	rpcAddr := flag.String("rpc-addr", defaultRPCAddr, "advertised gRPC address for peer discovery")
+	raftAddr := flag.String("raft-addr", defaultRaftAddr, "Raft peer traffic bind address")
+	bootstrap := flag.Bool("bootstrap", defaultBootstrap, "bootstrap Raft cluster as single voter")
 	flag.Parse()
 
 	if *rpcAddr == "" {
@@ -98,6 +115,21 @@ func main() {
 	}
 
 	service := distributedlog.New(clog, *nodeID, *rpcAddr)
+
+	raftConsensus, err := raft.NewConsensus(
+		consensus.WithApplyFn(service.ApplyFn()),
+		consensus.WithSnapshotFn(service.SnapshotFn()),
+		consensus.WithRestoreFn(service.RestoreFn()),
+		consensus.WithDataDir(filepath.Join(*dataDir, "raft")),
+		consensus.WithBindAddr(*raftAddr),
+		consensus.WithLocalID(*nodeID),
+		consensus.WithBootstrap(*bootstrap),
+	)
+	if err != nil {
+		log.Fatalf("consensus: %v", err)
+	}
+
+	service.SetConsensus(raftConsensus)
 
 	grpcSrv := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
 	api.RegisterLogServiceServer(grpcSrv, grpchandler.New(service))

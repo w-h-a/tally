@@ -2,8 +2,13 @@ package consensus
 
 import (
 	"context"
+	"errors"
 
 	api "github.com/w-h-a/tally/proto/log/v1"
+)
+
+var (
+	ErrNotLeader = errors.New("not leader")
 )
 
 type Consensus interface {
