@@ -5,11 +5,16 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"path/filepath"
 	"testing"
+	"time"
 
+	hraft "github.com/hashicorp/raft"
 	"github.com/stretchr/testify/require"
 	commitlog "github.com/w-h-a/tally/internal/client/commit_log"
 	"github.com/w-h-a/tally/internal/client/commit_log/file"
+	"github.com/w-h-a/tally/internal/client/consensus"
+	"github.com/w-h-a/tally/internal/client/consensus/raft"
 	grpchandler "github.com/w-h-a/tally/internal/handler/grpc"
 	distributedlog "github.com/w-h-a/tally/internal/service/distributed_log"
 	api "github.com/w-h-a/tally/proto/log/v1"
@@ -172,21 +177,42 @@ func TestGetServers(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, resp.Servers, 1)
 	require.Equal(t, "test-node", resp.Servers[0].Id)
-	require.Equal(t, "localhost:0", resp.Servers[0].RpcAddr)
+	require.NotEmpty(t, resp.Servers[0].RpcAddr)
 	require.True(t, resp.Servers[0].IsLeader)
 }
 
 func setupTest(t *testing.T) api.LogServiceClient {
 	t.Helper()
 
+	dir := t.TempDir()
+
 	clog, err := file.NewCommitLog(
-		commitlog.WithLocation(t.TempDir()),
+		commitlog.WithLocation(filepath.Join(dir, "log")),
 		commitlog.WithMaxStoreBytes(1024),
 		commitlog.WithMaxIndexBytes(1024),
 	)
 	require.NoError(t, err)
 
 	service := distributedlog.New(clog, "test-node", "localhost:0")
+
+	r, err := raft.NewConsensus(
+		consensus.WithApplyFn(service.ApplyFn()),
+		consensus.WithSnapshotFn(service.SnapshotFn()),
+		consensus.WithRestoreFn(service.RestoreFn()),
+		consensus.WithDataDir(filepath.Join(dir, "raft")),
+		consensus.WithBindAddr("localhost:0"),
+		consensus.WithLocalID("test-node"),
+		consensus.WithBootstrap(true),
+		raft.WithLogStore(hraft.NewInmemStore()),
+		raft.WithStableStore(hraft.NewInmemStore()),
+	)
+	require.NoError(t, err)
+
+	service.SetConsensus(r)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, service.WaitForLeader(ctx))
 
 	srv := grpc.NewServer()
 	api.RegisterLogServiceServer(srv, grpchandler.New(service))

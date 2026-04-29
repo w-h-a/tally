@@ -8,13 +8,18 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	hraft "github.com/hashicorp/raft"
 	"github.com/stretchr/testify/require"
 	gatewayapi "github.com/w-h-a/tally/api/gateway/v1"
 	commitlog "github.com/w-h-a/tally/internal/client/commit_log"
 	"github.com/w-h-a/tally/internal/client/commit_log/file"
+	"github.com/w-h-a/tally/internal/client/consensus"
+	"github.com/w-h-a/tally/internal/client/consensus/raft"
 	grpchandler "github.com/w-h-a/tally/internal/handler/grpc"
 	"github.com/w-h-a/tally/internal/handler/http/gateway"
 	distributedlog "github.com/w-h-a/tally/internal/service/distributed_log"
@@ -109,7 +114,7 @@ func TestGetServers(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
 	require.Len(t, got.Servers, 1)
 	require.Equal(t, "test-node", got.Servers[0].ID)
-	require.Equal(t, "localhost:0", got.Servers[0].RpcAddr)
+	require.NotEmpty(t, got.Servers[0].RpcAddr)
 	require.True(t, got.Servers[0].IsLeader)
 }
 
@@ -178,14 +183,35 @@ func parseSSE(raw string) []sseEvent {
 func setupTest(t *testing.T) *httptest.Server {
 	t.Helper()
 
+	dir := t.TempDir()
+
 	clog, err := file.NewCommitLog(
-		commitlog.WithLocation(t.TempDir()),
+		commitlog.WithLocation(filepath.Join(dir, "log")),
 		commitlog.WithMaxStoreBytes(1024),
 		commitlog.WithMaxIndexBytes(1024),
 	)
 	require.NoError(t, err)
 
 	service := distributedlog.New(clog, "test-node", "localhost:0")
+
+	r, err := raft.NewConsensus(
+		consensus.WithApplyFn(service.ApplyFn()),
+		consensus.WithSnapshotFn(service.SnapshotFn()),
+		consensus.WithRestoreFn(service.RestoreFn()),
+		consensus.WithDataDir(filepath.Join(dir, "raft")),
+		consensus.WithBindAddr("127.0.0.1:0"),
+		consensus.WithLocalID("test-node"),
+		consensus.WithBootstrap(true),
+		raft.WithLogStore(hraft.NewInmemStore()),
+		raft.WithStableStore(hraft.NewInmemStore()),
+	)
+	require.NoError(t, err)
+
+	service.SetConsensus(r)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, service.WaitForLeader(ctx))
 
 	grpcSrv := grpc.NewServer()
 	api.RegisterLogServiceServer(grpcSrv, grpchandler.New(service))
