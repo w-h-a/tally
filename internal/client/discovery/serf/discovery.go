@@ -145,7 +145,7 @@ func (d *serfDiscovery) Members(ctx context.Context) []discovery.Member {
 
 		result = append(result, discovery.Member{
 			ID:   m.Name,
-			Addr: m.Tags["rpc_addr"],
+			Addr: m.Tags["rpc_addr"], // client facing
 		})
 	}
 
@@ -194,7 +194,7 @@ func (d *serfDiscovery) handleMembers(eventType discovery.EventType, members []h
 		case d.events <- discovery.MemberEvent{
 			EventType: eventType,
 			ID:        m.Name,
-			Addr:      m.Tags["rpc_addr"],
+			Addr:      m.Tags["raft_addr"], // what raft needs
 		}:
 		case <-d.serf.ShutdownCh():
 			return

@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -19,9 +20,12 @@ import (
 	"github.com/w-h-a/tally/internal/client/commit_log/file"
 	"github.com/w-h-a/tally/internal/client/consensus"
 	"github.com/w-h-a/tally/internal/client/consensus/raft"
+	"github.com/w-h-a/tally/internal/client/discovery"
+	serfdisc "github.com/w-h-a/tally/internal/client/discovery/serf"
 	grpchandler "github.com/w-h-a/tally/internal/handler/grpc"
 	"github.com/w-h-a/tally/internal/handler/http/health"
 	distributedlog "github.com/w-h-a/tally/internal/service/distributed_log"
+	"github.com/w-h-a/tally/internal/service/membership"
 	tallyotel "github.com/w-h-a/tally/internal/util/otel"
 	api "github.com/w-h-a/tally/proto/log/v1"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -70,6 +74,16 @@ func main() {
 		}
 	}
 
+	defaultSerfAddr := "127.0.0.1:0"
+	if env := os.Getenv("TALLY_SERF_ADDR"); env != "" {
+		defaultSerfAddr = env
+	}
+
+	defaultSerfJoin := ""
+	if env := os.Getenv("TALLY_SERF_JOIN"); env != "" {
+		defaultSerfJoin = env
+	}
+
 	healthPort := flag.Int("health-port", defaultHealthPort, "HTTP health check port")
 	grpcPort := flag.Int("grpc-port", defaultGRPCPort, "gRPC listen port")
 	dataDir := flag.String("data-dir", defaultDataDir, "commit log data directory")
@@ -77,6 +91,8 @@ func main() {
 	rpcAddr := flag.String("rpc-addr", defaultRPCAddr, "advertised gRPC address for peer discovery")
 	raftAddr := flag.String("raft-addr", defaultRaftAddr, "Raft peer traffic bind address")
 	bootstrap := flag.Bool("bootstrap", defaultBootstrap, "bootstrap Raft cluster as single voter")
+	serfAddr := flag.String("serf-addr", defaultSerfAddr, "Serf gossip bind address")
+	serfJoin := flag.String("serf-join", defaultSerfJoin, "comma-separated Serf seed addresses")
 	flag.Parse()
 
 	if *rpcAddr == "" {
@@ -114,12 +130,30 @@ func main() {
 		log.Fatalf("commit log: %v", err)
 	}
 
-	service := distributedlog.New(clog, *nodeID, *rpcAddr)
+	var startJoinAddrs []string
+	if *serfJoin != "" {
+		startJoinAddrs = strings.Split(*serfJoin, ",")
+	}
+
+	disc, err := serfdisc.NewDiscovery(
+		discovery.WithNodeName(*nodeID),
+		discovery.WithBindAddr(*serfAddr),
+		discovery.WithTags(map[string]string{
+			"raft_addr": *raftAddr,
+			"rpc_addr":  *rpcAddr,
+		}),
+		discovery.WithStartJoinAddrs(startJoinAddrs),
+	)
+	if err != nil {
+		log.Fatalf("discovery: %v", err)
+	}
+
+	logSvc := distributedlog.New(clog, disc, *nodeID, *rpcAddr)
 
 	raftConsensus, err := raft.NewConsensus(
-		consensus.WithApplyFn(service.ApplyFn()),
-		consensus.WithSnapshotFn(service.SnapshotFn()),
-		consensus.WithRestoreFn(service.RestoreFn()),
+		consensus.WithApplyFn(logSvc.ApplyFn()),
+		consensus.WithSnapshotFn(logSvc.SnapshotFn()),
+		consensus.WithRestoreFn(logSvc.RestoreFn()),
 		consensus.WithDataDir(filepath.Join(*dataDir, "raft")),
 		consensus.WithBindAddr(*raftAddr),
 		consensus.WithLocalID(*nodeID),
@@ -129,10 +163,13 @@ func main() {
 		log.Fatalf("consensus: %v", err)
 	}
 
-	service.SetConsensus(raftConsensus)
+	logSvc.SetConsensus(raftConsensus)
+
+	membershipSvc := membership.New(disc, raftConsensus)
+	membershipSvc.Start()
 
 	grpcSrv := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
-	api.RegisterLogServiceServer(grpcSrv, grpchandler.New(service))
+	api.RegisterLogServiceServer(grpcSrv, grpchandler.New(logSvc))
 
 	grpcLis, err := net.Listen("tcp", fmt.Sprintf(":%d", *grpcPort))
 	if err != nil {
@@ -172,12 +209,16 @@ func main() {
 
 	grpcSrv.GracefulStop()
 
-	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
-		slog.Error("http shutdown", "error", err)
+	if err := membershipSvc.Close(shutdownCtx); err != nil {
+		slog.Error("membership close", "error", err)
 	}
 
-	if err := service.Close(shutdownCtx); err != nil {
-		slog.Error("service close", "error", err)
+	if err := logSvc.Close(shutdownCtx); err != nil {
+		slog.Error("log close", "error", err)
+	}
+
+	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
+		slog.Error("http shutdown", "error", err)
 	}
 
 	if err := shutdownTracer(shutdownCtx); err != nil {

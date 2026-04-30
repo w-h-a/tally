@@ -66,7 +66,24 @@ func setupTestCluster(t *testing.T, count int) []testMember {
 		)
 		require.NoError(t, err)
 
-		dlog := distributedlog.New(clog, nodeID, raftAddr)
+		// Serf — nodes 1+ join node 0
+		var startJoinAddrs []string
+		if i > 0 {
+			startJoinAddrs = []string{fmt.Sprintf("127.0.0.1:%d", serfPorts[0])}
+		}
+
+		disc, err := serfdisc.NewDiscovery(
+			discovery.WithNodeName(nodeID),
+			discovery.WithBindAddr(serfAddr),
+			discovery.WithTags(map[string]string{
+				"raft_addr": raftAddr,
+				"rpc_addr":  raftAddr,
+			}),
+			discovery.WithStartJoinAddrs(startJoinAddrs),
+		)
+		require.NoError(t, err)
+
+		dlog := distributedlog.New(clog, disc, nodeID, raftAddr)
 
 		// Raft — only node 0 bootstraps
 		raftConsensus, err := raft.NewConsensus(
@@ -83,22 +100,6 @@ func setupTestCluster(t *testing.T, count int) []testMember {
 		require.NoError(t, err)
 
 		dlog.SetConsensus(raftConsensus)
-
-		// Serf — nodes 1+ join node 0
-		var startJoinAddrs []string
-		if i > 0 {
-			startJoinAddrs = []string{fmt.Sprintf("127.0.0.1:%d", serfPorts[0])}
-		}
-
-		disc, err := serfdisc.NewDiscovery(
-			discovery.WithNodeName(nodeID),
-			discovery.WithBindAddr(serfAddr),
-			discovery.WithTags(map[string]string{
-				"rpc_addr": raftAddr,
-			}),
-			discovery.WithStartJoinAddrs(startJoinAddrs),
-		)
-		require.NoError(t, err)
 
 		// MembershipService bridges discovery → consensus
 		svc := membership.New(disc, raftConsensus)

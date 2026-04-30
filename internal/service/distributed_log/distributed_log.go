@@ -10,6 +10,7 @@ import (
 
 	commitlog "github.com/w-h-a/tally/internal/client/commit_log"
 	"github.com/w-h-a/tally/internal/client/consensus"
+	"github.com/w-h-a/tally/internal/client/discovery"
 	api "github.com/w-h-a/tally/proto/log/v1"
 	"google.golang.org/protobuf/proto"
 )
@@ -24,14 +25,16 @@ var (
 
 type Service struct {
 	commitlog commitlog.CommitLog
+	discovery discovery.Discovery
 	consensus consensus.Consensus
 	nodeID    string
 	rpcAddr   string
 }
 
-func New(commitLog commitlog.CommitLog, nodeID string, rpcAddr string) *Service {
+func New(commitLog commitlog.CommitLog, discovery discovery.Discovery, nodeID string, rpcAddr string) *Service {
 	return &Service{
 		commitlog: commitLog,
+		discovery: discovery,
 		nodeID:    nodeID,
 		rpcAddr:   rpcAddr,
 	}
@@ -85,7 +88,7 @@ func (s *Service) Append(ctx context.Context, rec *api.Record) (uint64, error) {
 
 // Read returns the record at the given offset from the local
 // CommitLog. Follower reads are eventually consistent: a follower might return
-// stale data if it has not yet applied the latest Raft entries. This is by
+// stale data if it has not yet applied the latest consensus entries. This is by
 // design. Reads do not go through consensus. They are fast but not
 // linearizable. For an append-only log, eventual consistency means a
 // stale read returns fewer records, never incorrect ones.
@@ -100,15 +103,33 @@ func (s *Service) Read(ctx context.Context, offset uint64) (*api.Record, error) 
 	return rec, nil
 }
 
+// GetServers returns the current consensus cluster membership enriched with
+// client-facing gRPC addresses. The consensus layer stores transport
+// addresses for peer replication, not the gRPC addresses that clients
+// connect to. We resolve gRPC addresses by joining the consensus server list
+// with discovery's live member list, which carries each node's client-facing
+// address. For the local node, we use s.rpcAddr directly. For nodes not found
+// in discovery, RpcAddr is left empty rather than leaking the consensus
+// transport address.
 func (s *Service) GetServers(ctx context.Context) ([]*api.Server, error) {
 	servers, err := s.consensus.GetServers(ctx)
 	if err != nil {
 		return nil, err
 	}
 
+	rpcAddrs := map[string]string{}
+
+	for _, m := range s.discovery.Members(ctx) {
+		rpcAddrs[m.ID] = m.Addr
+	}
+
 	for _, srv := range servers {
 		if srv.Id == s.nodeID {
 			srv.RpcAddr = s.rpcAddr
+		} else if addr, ok := rpcAddrs[srv.Id]; ok {
+			srv.RpcAddr = addr
+		} else {
+			srv.RpcAddr = ""
 		}
 	}
 
