@@ -83,6 +83,12 @@ func (s *Service) Append(ctx context.Context, rec *api.Record) (uint64, error) {
 	return offset, nil
 }
 
+// Read returns the record at the given offset from the local
+// CommitLog. Follower reads are eventually consistent: a follower might return
+// stale data if it has not yet applied the latest Raft entries. This is by
+// design. Reads do not go through consensus. They are fast but not
+// linearizable. For an append-only log, eventual consistency means a
+// stale read returns fewer records, never incorrect ones.
 func (s *Service) Read(ctx context.Context, offset uint64) (*api.Record, error) {
 	rec, err := s.commitlog.Read(ctx, offset)
 	if err != nil {

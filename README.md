@@ -39,6 +39,7 @@ graph TB
         MEM2 -.->|Discovery| S2
         MEM2 -.->|Consensus| R2
         DL2 -.->|Consensus| R2
+        DL2 -.->|Discovery| S2
         DL2 -.->|OffsetStore| FOS2
         DL2 -.->|CommitLog| L2
         L2 --> Seg2
@@ -57,6 +58,7 @@ graph TB
         DL1 -.->|CommitLog| L1
         DL1 -.->|OffsetStore| FOS1
         DL1 -.->|Consensus| R1
+        DL1 -.->|Discovery| S1
         MEM1 -.->|Consensus| R1
         MEM1 -.->|Discovery| S1
         L1 --> Seg1
@@ -70,7 +72,7 @@ graph TB
     S1 <-->|gossip| S2
 ```
 
-Writes go to the Raft leader. Reads are served by any node. Serf gossip handles cluster membership. Each node's local log is an ordered set of segments, each pairing an append-only store file with a memory-mapped index. Consumer offsets are replicated through the same consensus path.
+Writes go to the Raft leader. Reads are served by any node. Serf gossip handles cluster membership; each node advertises two Serf tags — `raft_addr` (Raft transport, used by MembershipService for AddVoter) and `rpc_addr` (gRPC, used by GetServers for client-facing address resolution). Each node's local log is an ordered set of segments, each pairing an append-only store file with a memory-mapped index. Consumer offsets are replicated through the same consensus path.
 
 #### Consensus
 
@@ -132,15 +134,15 @@ sequenceDiagram
     ES-->>NS: membership synced
 
     ES->>SD: EventCh <- MemberJoin
-    SD->>SD: skip self, extract rpc_addr from tags
-    SD->>MS: Events() <- MemberEvent{Join, id, addr}
-    MS->>RC: AddVoter(id, addr)
+    SD->>SD: skip self, extract raft_addr from tags
+    SD->>MS: Events() <- MemberEvent{Join, id, raftAddr}
+    MS->>RC: AddVoter(id, raftAddr)
     Note over RC: Raft adds new voter
 
     Note over NS: Node leaves gracefully
     NS->>ES: leave intent via gossip
     ES->>SD: EventCh <- MemberLeave
-    SD->>MS: Events() <- MemberEvent{Leave, id, addr}
+    SD->>MS: Events() <- MemberEvent{Leave, id, raftAddr}
     MS->>RC: RemoveServer(id)
     Note over RC: Raft removes server
 ```
