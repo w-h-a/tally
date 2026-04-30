@@ -189,6 +189,39 @@ func TestFollowerReads(t *testing.T) {
 	}
 }
 
+func TestThreeNodeReplication(t *testing.T) {
+	// arrange
+	nodes := setupTestCluster(t, 3)
+	requireServerCount(t, nodes[0].dlog, 3, 10*time.Second)
+
+	values := [][]byte{
+		[]byte("first"),
+		[]byte("second"),
+		[]byte("third"),
+	}
+
+	// act (write to leader)
+	for i, val := range values {
+		offset, err := nodes[0].dlog.Append(context.Background(), &api.Record{Value: val})
+		require.NoError(t, err)
+		require.Equal(t, uint64(i), offset)
+	}
+
+	// wait for replication to all followers
+	for _, follower := range nodes[1:] {
+		requireReplication(t, follower.dlog, uint64(len(values)-1), 10*time.Second)
+	}
+
+	// assert (all 3 nodes return the same records)
+	for _, node := range nodes {
+		for i, val := range values {
+			rec, err := node.dlog.Read(context.Background(), uint64(i))
+			require.NoError(t, err)
+			require.Equal(t, val, rec.Value)
+		}
+	}
+}
+
 type testNode struct {
 	dlog       *distributedlog.Service
 	membership *membership.Service
