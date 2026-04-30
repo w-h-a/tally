@@ -3,6 +3,7 @@ package distributedlog_test
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"path/filepath"
 	"testing"
@@ -16,9 +17,13 @@ import (
 	"github.com/w-h-a/tally/internal/client/consensus/raft"
 	"github.com/w-h-a/tally/internal/client/discovery"
 	serfdisc "github.com/w-h-a/tally/internal/client/discovery/serf"
+	grpchandler "github.com/w-h-a/tally/internal/handler/grpc"
 	distributedlog "github.com/w-h-a/tally/internal/service/distributed_log"
 	"github.com/w-h-a/tally/internal/service/membership"
 	api "github.com/w-h-a/tally/proto/log/v1"
+	"go.uber.org/goleak"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 func TestAppendAndRead(t *testing.T) {
@@ -119,46 +124,6 @@ func TestSnapshotAndRestore(t *testing.T) {
 	}
 }
 
-func setupTest(t *testing.T) *distributedlog.Service {
-	t.Helper()
-
-	dir := t.TempDir()
-
-	clog, err := file.NewCommitLog(
-		commitlog.WithLocation(filepath.Join(dir, "log")),
-		commitlog.WithMaxStoreBytes(1024),
-		commitlog.WithMaxIndexBytes(1024),
-	)
-	require.NoError(t, err)
-
-	service := distributedlog.New(clog, "test-node-0", "localhost:0")
-
-	r, err := raft.NewConsensus(
-		consensus.WithApplyFn(service.ApplyFn()),
-		consensus.WithSnapshotFn(service.SnapshotFn()),
-		consensus.WithRestoreFn(service.RestoreFn()),
-		consensus.WithDataDir(filepath.Join(dir, "raft")),
-		consensus.WithBindAddr("localhost:0"),
-		consensus.WithLocalID("test-node-0"),
-		consensus.WithBootstrap(true),
-		raft.WithLogStore(hraft.NewInmemStore()),
-		raft.WithStableStore(hraft.NewInmemStore()),
-	)
-	require.NoError(t, err)
-
-	service.SetConsensus(r)
-
-	t.Cleanup(func() {
-		service.Close(context.Background())
-	})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	require.NoError(t, service.WaitForLeader(ctx))
-
-	return service
-}
-
 func TestFollowerReads(t *testing.T) {
 	// arrange
 	nodes := setupTestCluster(t, 2)
@@ -222,6 +187,157 @@ func TestThreeNodeReplication(t *testing.T) {
 	}
 }
 
+func TestMultiNodeIntegration(t *testing.T) {
+	// Registered first → runs last (LIFO) → checks after all node cleanups.
+	t.Cleanup(func() {
+		goleak.VerifyNone(t,
+			goleak.IgnoreAnyFunction("github.com/hashicorp/raft.(*NetworkTransport).handleCommand"),
+		)
+	})
+
+	// arrange
+	nodes := setupIntegrationCluster(t, 3)
+	requireServerCount(t, nodes[0].dlog, 3, 10*time.Second)
+
+	values := [][]byte{
+		[]byte("alpha"),
+		[]byte("bravo"),
+		[]byte("charlie"),
+		[]byte("delta"),
+		[]byte("echo"),
+	}
+
+	// act (write to leader)
+	for i, val := range values {
+		resp, err := nodes[0].client.Produce(context.Background(), &api.ProduceRequest{
+			Record: &api.Record{Value: val},
+		})
+		require.NoError(t, err)
+		require.Equal(t, uint64(i), resp.Offset)
+	}
+
+	for _, node := range nodes[1:] {
+		requireReplication(t, node.dlog, uint64(len(values)-1), 10*time.Second)
+	}
+
+	t.Run("ordering consistent across all nodes", func(t *testing.T) {
+		// assert
+		for _, node := range nodes {
+			for i, val := range values {
+				resp, err := node.client.Consume(context.Background(), &api.ConsumeRequest{
+					Offset: uint64(i),
+				})
+				require.NoError(t, err)
+				require.Equal(t, val, resp.Record.Value)
+			}
+		}
+	})
+
+	t.Run("GetServers returns 3 servers with correct addresses and leader", func(t *testing.T) {
+		// act
+		resp, err := nodes[0].client.GetServers(context.Background(), &api.GetServersRequest{})
+		require.NoError(t, err)
+
+		// assert
+		require.Len(t, resp.Servers, 3)
+
+		leaderCount := 0
+
+		for _, srv := range resp.Servers {
+			if srv.IsLeader {
+				leaderCount++
+			}
+
+			var found bool
+
+			for _, node := range nodes {
+				if node.nodeID == srv.Id {
+					require.Equal(t, node.grpcAddr, srv.RpcAddr,
+						"server %s: RpcAddr should be gRPC address, not Raft address", srv.Id)
+					found = true
+					break
+				}
+			}
+
+			require.True(t, found, "server %s not found in test nodes", srv.Id)
+		}
+
+		require.Equal(t, 1, leaderCount, "expected exactly 1 leader")
+	})
+
+	t.Run("ConsumeStream from follower returns all records in order", func(t *testing.T) {
+		// act
+		stream, err := nodes[1].client.ConsumeStream(context.Background(), &api.ConsumeStreamRequest{
+			Offset: 0,
+		})
+		require.NoError(t, err)
+
+		// assert
+		for i, val := range values {
+			resp, err := stream.Recv()
+			require.NoError(t, err)
+			require.Equal(t, val, resp.Record.Value)
+			require.Equal(t, uint64(i), resp.Record.Offset)
+		}
+
+		_, err = stream.Recv()
+		require.Equal(t, io.EOF, err)
+	})
+}
+
+// --- helpers ---
+
+func setupTest(t *testing.T) *distributedlog.Service {
+	t.Helper()
+
+	dir := t.TempDir()
+
+	clog, err := file.NewCommitLog(
+		commitlog.WithLocation(filepath.Join(dir, "log")),
+		commitlog.WithMaxStoreBytes(1024),
+		commitlog.WithMaxIndexBytes(1024),
+	)
+	require.NoError(t, err)
+
+	disc, err := serfdisc.NewDiscovery(
+		discovery.WithNodeName("test-node-0"),
+		discovery.WithBindAddr("127.0.0.1:0"),
+		discovery.WithTags(map[string]string{
+			"raft_addr": "localhost:0",
+			"rpc_addr":  "localhost:0",
+		}),
+	)
+	require.NoError(t, err)
+
+	service := distributedlog.New(clog, disc, "test-node-0", "localhost:0")
+
+	r, err := raft.NewConsensus(
+		consensus.WithApplyFn(service.ApplyFn()),
+		consensus.WithSnapshotFn(service.SnapshotFn()),
+		consensus.WithRestoreFn(service.RestoreFn()),
+		consensus.WithDataDir(filepath.Join(dir, "raft")),
+		consensus.WithBindAddr("localhost:0"),
+		consensus.WithLocalID("test-node-0"),
+		consensus.WithBootstrap(true),
+		raft.WithLogStore(hraft.NewInmemStore()),
+		raft.WithStableStore(hraft.NewInmemStore()),
+	)
+	require.NoError(t, err)
+
+	service.SetConsensus(r)
+
+	t.Cleanup(func() {
+		disc.Leave(context.Background())
+		service.Close(context.Background())
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, service.WaitForLeader(ctx))
+
+	return service
+}
+
 type testNode struct {
 	dlog       *distributedlog.Service
 	membership *membership.Service
@@ -252,7 +368,23 @@ func setupTestCluster(t *testing.T, count int) []testNode {
 		)
 		require.NoError(t, err)
 
-		dlog := distributedlog.New(clog, nodeID, raftAddr)
+		var startJoinAddrs []string
+		if i > 0 {
+			startJoinAddrs = []string{fmt.Sprintf("127.0.0.1:%d", serfPorts[0])}
+		}
+
+		disc, err := serfdisc.NewDiscovery(
+			discovery.WithNodeName(nodeID),
+			discovery.WithBindAddr(serfAddr),
+			discovery.WithTags(map[string]string{
+				"raft_addr": raftAddr,
+				"rpc_addr":  raftAddr,
+			}),
+			discovery.WithStartJoinAddrs(startJoinAddrs),
+		)
+		require.NoError(t, err)
+
+		dlog := distributedlog.New(clog, disc, nodeID, raftAddr)
 
 		raftConsensus, err := raft.NewConsensus(
 			consensus.WithApplyFn(dlog.ApplyFn()),
@@ -269,21 +401,6 @@ func setupTestCluster(t *testing.T, count int) []testNode {
 
 		dlog.SetConsensus(raftConsensus)
 
-		var startJoinAddrs []string
-		if i > 0 {
-			startJoinAddrs = []string{fmt.Sprintf("127.0.0.1:%d", serfPorts[0])}
-		}
-
-		disc, err := serfdisc.NewDiscovery(
-			discovery.WithNodeName(nodeID),
-			discovery.WithBindAddr(serfAddr),
-			discovery.WithTags(map[string]string{
-				"rpc_addr": raftAddr,
-			}),
-			discovery.WithStartJoinAddrs(startJoinAddrs),
-		)
-		require.NoError(t, err)
-
 		svc := membership.New(disc, raftConsensus)
 		svc.Start()
 
@@ -293,6 +410,121 @@ func setupTestCluster(t *testing.T, count int) []testNode {
 		}
 
 		t.Cleanup(func() {
+			svc.Close(context.Background())
+			dlog.Close(context.Background())
+		})
+
+		if i == 0 {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			require.NoError(t, dlog.WaitForLeader(ctx))
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	require.NoError(t, nodes[0].dlog.WaitForLeader(ctx))
+
+	return nodes
+}
+
+type integrationNode struct {
+	dlog       *distributedlog.Service
+	membership *membership.Service
+	client     api.LogServiceClient
+	nodeID     string
+	grpcAddr   string
+}
+
+func setupIntegrationCluster(t *testing.T, count int) []integrationNode {
+	t.Helper()
+
+	serfPorts := make([]int, count)
+	raftPorts := make([]int, count)
+	grpcPorts := make([]int, count)
+	for i := range count {
+		serfPorts[i] = getFreePort(t)
+		raftPorts[i] = getFreePort(t)
+		grpcPorts[i] = getFreePort(t)
+	}
+
+	nodes := make([]integrationNode, count)
+
+	for i := range count {
+		dir := t.TempDir()
+		nodeID := fmt.Sprintf("node-%d", i)
+		raftAddr := fmt.Sprintf("127.0.0.1:%d", raftPorts[i])
+		serfAddr := fmt.Sprintf("127.0.0.1:%d", serfPorts[i])
+		grpcAddr := fmt.Sprintf("127.0.0.1:%d", grpcPorts[i])
+
+		clog, err := file.NewCommitLog(
+			commitlog.WithLocation(filepath.Join(dir, "log")),
+			commitlog.WithMaxStoreBytes(1024),
+			commitlog.WithMaxIndexBytes(1024),
+		)
+		require.NoError(t, err)
+
+		var startJoinAddrs []string
+		if i > 0 {
+			startJoinAddrs = []string{fmt.Sprintf("127.0.0.1:%d", serfPorts[0])}
+		}
+
+		disc, err := serfdisc.NewDiscovery(
+			discovery.WithNodeName(nodeID),
+			discovery.WithBindAddr(serfAddr),
+			discovery.WithTags(map[string]string{
+				"raft_addr": raftAddr,
+				"rpc_addr":  grpcAddr,
+			}),
+			discovery.WithStartJoinAddrs(startJoinAddrs),
+		)
+		require.NoError(t, err)
+
+		dlog := distributedlog.New(clog, disc, nodeID, grpcAddr)
+
+		raftConsensus, err := raft.NewConsensus(
+			consensus.WithApplyFn(dlog.ApplyFn()),
+			consensus.WithSnapshotFn(dlog.SnapshotFn()),
+			consensus.WithRestoreFn(dlog.RestoreFn()),
+			consensus.WithDataDir(filepath.Join(dir, "raft")),
+			consensus.WithBindAddr(raftAddr),
+			consensus.WithLocalID(nodeID),
+			consensus.WithBootstrap(i == 0),
+			raft.WithLogStore(hraft.NewInmemStore()),
+			raft.WithStableStore(hraft.NewInmemStore()),
+		)
+		require.NoError(t, err)
+
+		dlog.SetConsensus(raftConsensus)
+
+		svc := membership.New(disc, raftConsensus)
+		svc.Start()
+
+		lis, err := net.Listen("tcp", grpcAddr)
+		require.NoError(t, err)
+
+		grpcSrv := grpc.NewServer()
+		api.RegisterLogServiceServer(grpcSrv, grpchandler.New(dlog))
+
+		go grpcSrv.Serve(lis)
+
+		conn, err := grpc.NewClient(
+			grpcAddr,
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		)
+		require.NoError(t, err)
+
+		nodes[i] = integrationNode{
+			dlog:       dlog,
+			membership: svc,
+			client:     api.NewLogServiceClient(conn),
+			nodeID:     nodeID,
+			grpcAddr:   grpcAddr,
+		}
+
+		t.Cleanup(func() {
+			conn.Close()
+			grpcSrv.GracefulStop()
 			svc.Close(context.Background())
 			dlog.Close(context.Background())
 		})

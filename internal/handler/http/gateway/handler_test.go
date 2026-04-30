@@ -20,6 +20,8 @@ import (
 	"github.com/w-h-a/tally/internal/client/commit_log/file"
 	"github.com/w-h-a/tally/internal/client/consensus"
 	"github.com/w-h-a/tally/internal/client/consensus/raft"
+	"github.com/w-h-a/tally/internal/client/discovery"
+	serfdisc "github.com/w-h-a/tally/internal/client/discovery/serf"
 	grpchandler "github.com/w-h-a/tally/internal/handler/grpc"
 	"github.com/w-h-a/tally/internal/handler/http/gateway"
 	distributedlog "github.com/w-h-a/tally/internal/service/distributed_log"
@@ -192,7 +194,17 @@ func setupTest(t *testing.T) *httptest.Server {
 	)
 	require.NoError(t, err)
 
-	service := distributedlog.New(clog, "test-node", "localhost:0")
+	disc, err := serfdisc.NewDiscovery(
+		discovery.WithNodeName("test-node"),
+		discovery.WithBindAddr("127.0.0.1:0"),
+		discovery.WithTags(map[string]string{
+			"raft_addr": "localhost:0",
+			"rpc_addr":  "localhost:0",
+		}),
+	)
+	require.NoError(t, err)
+
+	service := distributedlog.New(clog, disc, "test-node", "localhost:0")
 
 	r, err := raft.NewConsensus(
 		consensus.WithApplyFn(service.ApplyFn()),
@@ -226,6 +238,7 @@ func setupTest(t *testing.T) *httptest.Server {
 
 	t.Cleanup(func() {
 		grpcSrv.GracefulStop()
+		disc.Leave(context.Background())
 		service.Close(context.Background())
 	})
 
