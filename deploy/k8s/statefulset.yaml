@@ -1,5 +1,5 @@
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: tally
   namespace: tally
@@ -7,9 +7,9 @@ metadata:
     app: tally
     version: VERSION_PLACEHOLDER
 spec:
-  replicas: 1
-  strategy:
-    type: Recreate
+  serviceName: tally
+  replicas: 3
+  podManagementPolicy: OrderedReady
   selector:
     matchLabels:
       app: tally
@@ -22,11 +22,23 @@ spec:
       containers:
         - name: tally
           image: IMAGE_PLACEHOLDER
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              case "${HOSTNAME##*-}" in
+                0) export TALLY_BOOTSTRAP=true ;;
+                *) export TALLY_BOOTSTRAP=false ;;
+              esac
+              exec /tally
           ports:
             - name: health
               containerPort: 8080
             - name: grpc
               containerPort: 9090
+            - name: raft
+              containerPort: 9091
+            - name: serf
+              containerPort: 9092
           env:
             - name: VERSION
               value: VERSION_PLACEHOLDER
@@ -41,7 +53,13 @@ spec:
                 fieldRef:
                   fieldPath: metadata.name
             - name: TALLY_RPC_ADDR
-              value: tally.tally.svc.cluster.local:9090
+              value: $(TALLY_NODE_ID).tally.tally.svc.cluster.local:9090
+            - name: TALLY_RAFT_ADDR
+              value: $(TALLY_NODE_ID).tally.tally.svc.cluster.local:9091
+            - name: TALLY_SERF_ADDR
+              value: "0.0.0.0:9092"
+            - name: TALLY_SERF_JOIN
+              value: tally-0.tally.tally.svc.cluster.local:9092,tally-1.tally.tally.svc.cluster.local:9092,tally-2.tally.tally.svc.cluster.local:9092
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: http://otel-collector.otel-collector.svc.cluster.local:4317
           volumeMounts:
@@ -71,7 +89,13 @@ spec:
             capabilities:
               drop:
                 - ALL
-      volumes:
-        - name: data
-          persistentVolumeClaim:
-            claimName: tally-data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: do-block-storage
+        resources:
+          requests:
+            storage: 1Gi

@@ -4,7 +4,7 @@ metadata:
   name: tally
   namespace: tally
 spec:
-  type: ClusterIP
+  clusterIP: None
   selector:
     app: tally
   ports:
@@ -14,3 +14,9 @@ spec:
     - name: grpc
       port: 9090
       targetPort: grpc
+    - name: raft
+      port: 9091
+      targetPort: raft
+    - name: serf
+      port: 9092
+      targetPort: serf

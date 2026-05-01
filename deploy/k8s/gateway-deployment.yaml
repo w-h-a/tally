@@ -31,7 +31,7 @@ spec:
             - name: TALLY_HTTP_PORT
               value: "8080"
             - name: TALLY_ADDR
-              value: tally.tally.svc.cluster.local:9090
+              value: tally-0.tally.tally.svc.cluster.local:9090
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: http://otel-collector.otel-collector.svc.cluster.local:4317
           livenessProbe:
