@@ -1,19 +1,72 @@
 services:
-  tally:
+  tally-0:
     build:
       context: .
       dockerfile: Dockerfile
     ports:
       - "9090:9090"
-      - "8081:8081"
     environment:
       - TALLY_GRPC_PORT=9090
-      - TALLY_HEALTH_PORT=8081
+      - TALLY_HEALTH_PORT=8080
       - TALLY_DATA_DIR=/data
       - TALLY_NODE_ID=tally-0
-      - TALLY_RPC_ADDR=tally:9090
+      - TALLY_RPC_ADDR=tally-0:9090
+      - TALLY_RAFT_ADDR=tally-0:9091
+      - TALLY_SERF_ADDR=0.0.0.0:9092
+      - TALLY_SERF_JOIN=tally-0:9092,tally-1:9092,tally-2:9092
+      - TALLY_BOOTSTRAP=true
     volumes:
-      - tally-data:/data
+      - tally-0-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/healthz"]
+      interval: 3s
+      timeout: 5s
+      retries: 5
+      start_period: 3s
+
+  tally-1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "9190:9090"
+    environment:
+      - TALLY_GRPC_PORT=9090
+      - TALLY_HEALTH_PORT=8080
+      - TALLY_DATA_DIR=/data
+      - TALLY_NODE_ID=tally-1
+      - TALLY_RPC_ADDR=tally-1:9090
+      - TALLY_RAFT_ADDR=tally-1:9091
+      - TALLY_SERF_ADDR=0.0.0.0:9092
+      - TALLY_SERF_JOIN=tally-0:9092,tally-1:9092,tally-2:9092
+      - TALLY_BOOTSTRAP=false
+    volumes:
+      - tally-1-data:/data
+    depends_on:
+      tally-0:
+        condition: service_healthy
+
+  tally-2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "9290:9090"
+    environment:
+      - TALLY_GRPC_PORT=9090
+      - TALLY_HEALTH_PORT=8080
+      - TALLY_DATA_DIR=/data
+      - TALLY_NODE_ID=tally-2
+      - TALLY_RPC_ADDR=tally-2:9090
+      - TALLY_RAFT_ADDR=tally-2:9091
+      - TALLY_SERF_ADDR=0.0.0.0:9092
+      - TALLY_SERF_JOIN=tally-0:9092,tally-1:9092,tally-2:9092
+      - TALLY_BOOTSTRAP=false
+    volumes:
+      - tally-2-data:/data
+    depends_on:
+      tally-0:
+        condition: service_healthy
 
   gateway:
     build:
@@ -23,9 +76,12 @@ services:
       - "8080:8080"
     environment:
       - TALLY_HTTP_PORT=8080
-      - TALLY_ADDR=tally:9090
+      - TALLY_ADDR=tally-0:9090
     depends_on:
-      - tally
+      tally-0:
+        condition: service_healthy
 
 volumes:
-  tally-data:
+  tally-0-data:
+  tally-1-data:
+  tally-2-data:

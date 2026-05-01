@@ -136,9 +136,9 @@ jobs:
         env:
           IMAGE_TAG: ${{ needs.build_push.outputs.image_tag }}
         run: |
-          sed -i "s|IMAGE_PLACEHOLDER|${{ env.DOCKER_REPO_PATH }}:${IMAGE_TAG}|" deploy/k8s/deployment.yaml
+          sed -i "s|IMAGE_PLACEHOLDER|${{ env.DOCKER_REPO_PATH }}:${IMAGE_TAG}|" deploy/k8s/statefulset.yaml
           sed -i "s|GATEWAY_IMAGE_PLACEHOLDER|${{ env.DOCKER_GATEWAY_REPO_PATH }}:${IMAGE_TAG}|" deploy/k8s/gateway-deployment.yaml
-          sed -i "s|VERSION_PLACEHOLDER|${IMAGE_TAG}|g" deploy/k8s/deployment.yaml
+          sed -i "s|VERSION_PLACEHOLDER|${IMAGE_TAG}|g" deploy/k8s/statefulset.yaml
           sed -i "s|VERSION_PLACEHOLDER|${IMAGE_TAG}|g" deploy/k8s/gateway-deployment.yaml
 
       - name: Apply manifests
@@ -155,7 +155,7 @@ jobs:
             --name kubectl-rollout-tally \
             --force-trace-id $TRACE_ID \
             --attrs "service=tally,github.repository=$GITHUB_REPOSITORY,github.run_id=$GITHUB_RUN_ID,github.sha=$GITHUB_SHA,job=deploy,image_tag=${{ needs.build_push.outputs.image_tag }}" \
-            -- kubectl rollout status deployment/tally -n tally --timeout=120s
+            -- kubectl rollout status statefulset/tally -n tally --timeout=180s
 
       - name: Verify gateway rollout
         run: |
