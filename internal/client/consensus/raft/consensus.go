@@ -83,9 +83,11 @@ func NewConsensus(opts ...consensus.Option) (consensus.Consensus, error) {
 		}
 	}()
 
-	bindAddr := ln.Addr().String()
+	host, _, _ := net.SplitHostPort(options.BindAddr)
+	_, port, _ := net.SplitHostPort(ln.Addr().String())
+	bindAddr := net.JoinHostPort(host, port)
 
-	stream := newStreamLayer(ln)
+	stream := newStreamLayer(ln, &tcpAddr{s: bindAddr})
 
 	transport := hraft.NewNetworkTransport(stream, 5, 10*time.Second, os.Stderr)
 
