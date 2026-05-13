@@ -74,7 +74,7 @@ func main() {
 	client := api.NewLogServiceClient(conn)
 
 	gw := gateway.New(client)
-	h := health.New()
+	h := health.New(version, nil)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /produce", gw.Produce)

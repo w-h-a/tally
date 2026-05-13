@@ -140,6 +140,10 @@ func (s *Service) WaitForLeader(ctx context.Context) error {
 	return s.consensus.WaitForLeader(ctx)
 }
 
+func (s *Service) Ready(ctx context.Context) string {
+	return s.consensus.State(ctx)
+}
+
 func (s *Service) Close(ctx context.Context) error {
 	consensusErr := s.consensus.Close(ctx)
 	commitlogErr := s.commitlog.Close(ctx)
