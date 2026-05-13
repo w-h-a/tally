@@ -183,7 +183,7 @@ func main() {
 		}
 	}()
 
-	h := health.New()
+	h := health.New(version, func() string { return logSvc.Ready(context.Background()) })
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", h.Healthz)
 	mux.HandleFunc("GET /readyz", h.Readyz)
