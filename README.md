@@ -149,4 +149,40 @@ sequenceDiagram
 
 ## Usage
 
-Coming soon!
+### Local cluster with Docker Compose
+
+```bash
+docker compose up -d
+```
+
+This starts a 3-node Tally cluster (`tally-0`, `tally-1`, `tally-2`) and an HTTP gateway on port 8080.
+
+### CLI
+
+The `tallycli` tool talks to the Tally gateway over HTTP.
+
+```bash
+# produce a record
+go run ./cmd/tallycli/ produce --record "hello world"
+# 0
+
+# consume a record by offset
+go run ./cmd/tallycli/ consume --offset 0
+# hello world
+
+# list cluster servers
+go run ./cmd/tallycli/ servers
+# tally-0  tally-0:9090  leader
+# tally-1  tally-1:9090  follower
+# tally-2  tally-2:9090  follower
+
+# stream all records from the beginning
+go run ./cmd/tallycli/ stream --from 0
+# hello world
+```
+
+Use `--url` to point at a different gateway (default `http://localhost:8080`):
+
+```bash
+go run ./cmd/tallycli/ --url http://tally.example.com produce --record "hello"
+```
