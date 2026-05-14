@@ -5,6 +5,7 @@ metadata:
   namespace: tally
 spec:
   clusterIP: None
+  publishNotReadyAddresses: true
   selector:
     app: tally
   ports:
