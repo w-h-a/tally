@@ -27,6 +27,10 @@ func (h *Handler) Produce(ctx context.Context, req *api.ProduceRequest) (*api.Pr
 
 	offset, err := h.service.Append(ctx, req.Record)
 	if err != nil {
+		var notLeader *distributedlog.NotLeaderError
+		if errors.As(err, &notLeader) {
+			return nil, status.Error(codes.Unavailable, err.Error())
+		}
 		return nil, err
 	}
 
@@ -71,6 +75,10 @@ func (h *Handler) ProduceStream(stream api.LogService_ProduceStreamServer) error
 
 		offset, err := h.service.Append(stream.Context(), req.Record)
 		if err != nil {
+			var notLeader *distributedlog.NotLeaderError
+			if errors.As(err, &notLeader) {
+				return status.Error(codes.Unavailable, err.Error())
+			}
 			return err
 		}
 

@@ -1,9 +1,11 @@
 package raft
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -68,6 +70,7 @@ func NewConsensus(opts ...consensus.Option) (consensus.Consensus, error) {
 
 	config := hraft.DefaultConfig()
 	config.LocalID = hraft.ServerID(options.LocalID)
+	config.SnapshotThreshold = 100
 
 	fsm := newFSM(options.ApplyFn, options.SnapshotFn, options.RestoreFn)
 
@@ -121,31 +124,39 @@ func NewConsensus(opts ...consensus.Option) (consensus.Consensus, error) {
 		stableStore = boltDB
 	}
 
-	if options.Bootstrap {
-		hasState, err := hraft.HasExistingState(logStore, stableStore, snapStore)
-		if err != nil {
-			return nil, fmt.Errorf("consensus/raft: check existing state: %w", err)
-		}
+	hasState, err := hraft.HasExistingState(logStore, stableStore, snapStore)
+	if err != nil {
+		return nil, fmt.Errorf("consensus/raft: check existing state: %w", err)
+	}
 
-		if !hasState {
-			err := hraft.BootstrapCluster(
-				config,
-				logStore,
-				stableStore,
-				snapStore,
-				transport,
-				hraft.Configuration{
-					Servers: []hraft.Server{
-						{
-							ID:      config.LocalID,
-							Address: hraft.ServerAddress(bindAddr),
-						},
+	if options.Bootstrap && !hasState {
+		err := hraft.BootstrapCluster(
+			config,
+			logStore,
+			stableStore,
+			snapStore,
+			transport,
+			hraft.Configuration{
+				Servers: []hraft.Server{
+					{
+						ID:      config.LocalID,
+						Address: hraft.ServerAddress(bindAddr),
 					},
 				},
-			)
-			if err != nil {
-				return nil, fmt.Errorf("consensus/raft: bootstrap: %w", err)
-			}
+			},
+		)
+		if err != nil {
+			return nil, fmt.Errorf("consensus/raft: bootstrap: %w", err)
+		}
+	}
+
+	// Reset the FSM before Raft starts so recovery (snapshot restore +
+	// log replay) rebuilds from a clean slate. Without this, replayed
+	// entries append to a commit log that already has the data on disk,
+	// creating duplicates.
+	if hasState {
+		if err := options.RestoreFn(io.NopCloser(bytes.NewReader(nil))); err != nil {
+			return nil, fmt.Errorf("consensus/raft: pre-replay reset: %w", err)
 		}
 	}
 
@@ -319,11 +330,19 @@ func (c *raftConsensus) LeadershipTransfer(ctx context.Context) error {
 	return nil
 }
 
-// Close shuts down the Raft node, stopping all background routines
-// and releasing resources
+// Close snapshots the FSM state and then shuts down the Raft node.
+// The snapshot ensures that on restart, Raft does not replay already-applied
+// log entries through the FSM, which would duplicate commit log records.
+// Snapshot errors are non-fatal (followers can't snapshot, and there may be
+// nothing new to snapshot) — shutdown must always proceed.
 func (c *raftConsensus) Close(ctx context.Context) error {
 	_, span := c.tracer.Start(ctx, "consensus.Close")
 	defer span.End()
+
+	snapFuture := c.raft.Snapshot()
+	if err := snapFuture.Error(); err != nil {
+		span.SetAttributes(attribute.String("consensus.snapshot_skip_reason", err.Error()))
+	}
 
 	future := c.raft.Shutdown()
 	if err := future.Error(); err != nil {
