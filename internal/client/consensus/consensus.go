@@ -19,5 +19,6 @@ type Consensus interface {
 	GetServers(ctx context.Context) ([]*api.Server, error)
 	State(ctx context.Context) string
 	WaitForLeader(ctx context.Context) error
+	LeadershipTransfer(ctx context.Context) error
 	Close(ctx context.Context) error
 }

@@ -302,6 +302,23 @@ func (c *raftConsensus) WaitForLeader(ctx context.Context) error {
 	}
 }
 
+// LeadershipTransfer transfers leadership to another server in the
+// cluster. Best-effort: used during graceful shutdown to avoid the
+// election timeout window where no writes can be processed.
+func (c *raftConsensus) LeadershipTransfer(ctx context.Context) error {
+	_, span := c.tracer.Start(ctx, "consensus.LeadershipTransfer")
+	defer span.End()
+
+	future := c.raft.LeadershipTransfer()
+	if err := future.Error(); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return err
+	}
+
+	return nil
+}
+
 // Close shuts down the Raft node, stopping all background routines
 // and releasing resources
 func (c *raftConsensus) Close(ctx context.Context) error {

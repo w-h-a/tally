@@ -150,7 +150,7 @@ func main() {
 
 	logSvc := distributedlog.New(clog, disc, *nodeID, *rpcAddr)
 
-	raftConsensus, err := raft.NewConsensus(
+	cons, err := raft.NewConsensus(
 		consensus.WithApplyFn(logSvc.ApplyFn()),
 		consensus.WithSnapshotFn(logSvc.SnapshotFn()),
 		consensus.WithRestoreFn(logSvc.RestoreFn()),
@@ -163,9 +163,9 @@ func main() {
 		log.Fatalf("consensus: %v", err)
 	}
 
-	logSvc.SetConsensus(raftConsensus)
+	logSvc.SetConsensus(cons)
 
-	membershipSvc := membership.New(disc, raftConsensus)
+	membershipSvc := membership.New(disc, cons)
 	membershipSvc.Start()
 
 	grpcSrv := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
@@ -202,24 +202,76 @@ func main() {
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	<-sigCh
+	sig := <-sigCh
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	go func() {
+		<-sigCh
+		slog.Warn("received second signal, forcing exit")
+		os.Exit(1)
+	}()
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	grpcSrv.GracefulStop()
+	consensusState := cons.State(shutdownCtx)
 
+	slog.Info("shutdown starting", "signal", sig.String(), "node_id", *nodeID, "consensus_state", consensusState)
+
+	start := time.Now()
+
+	// 1. gRPC graceful shutdown
+	grpcDone := make(chan struct{})
+	go func() {
+		grpcSrv.GracefulStop()
+		close(grpcDone)
+	}()
+
+	drainTimer := time.NewTimer(15 * time.Second)
+	select {
+	case <-grpcDone:
+		drainTimer.Stop()
+	case <-drainTimer.C:
+		slog.Warn("grpc graceful stop timed out, forcing", "node_id", *nodeID)
+		grpcSrv.Stop()
+		<-grpcDone
+	}
+
+	// 2. Leadership transfer if leader
+	leadershipTransferred := false
+	if cons.State(shutdownCtx) == "Leader" {
+		if err := cons.LeadershipTransfer(shutdownCtx); err != nil {
+			slog.Warn("leadership transfer failed, cluster will re-elect", "node_id", *nodeID, "error", err)
+		} else {
+			leadershipTransferred = true
+		}
+	}
+
+	// 3. Leave discovery cluster
+	discoveryLeft := true
 	if err := membershipSvc.Close(shutdownCtx); err != nil {
 		slog.Error("membership close", "error", err)
+		discoveryLeft = false
 	}
 
+	// 4. Close distributed log
+	logClosed := true
 	if err := logSvc.Close(shutdownCtx); err != nil {
 		slog.Error("log close", "error", err)
+		logClosed = false
 	}
 
+	// 5. HTTP shutdown
 	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("http shutdown", "error", err)
 	}
+
+	slog.Info("shutdown complete",
+		"node_id", *nodeID,
+		"drain_duration_ms", time.Since(start).Milliseconds(),
+		"leadership_transferred", leadershipTransferred,
+		"discovery_left", discoveryLeft,
+		"commitlog_closed", logClosed,
+	)
 
 	if err := shutdownTracer(shutdownCtx); err != nil {
 		slog.Error("tracer shutdown", "error", err)
