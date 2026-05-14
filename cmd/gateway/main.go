@@ -16,6 +16,7 @@ import (
 	"github.com/w-h-a/tally/internal/handler/http/gateway"
 	"github.com/w-h-a/tally/internal/handler/http/health"
 	tallyotel "github.com/w-h-a/tally/internal/util/otel"
+	"github.com/w-h-a/tally/loadbalance/tally"
 	api "github.com/w-h-a/tally/proto/log/v1"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -62,10 +63,14 @@ func main() {
 		log.Fatalf("otel logger: %v", err)
 	}
 
+	tallyLBConfig := tally.NewLBConfig()
+
 	conn, err := grpc.NewClient(
-		*tallyAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+		fmt.Sprintf("%s:///%s", tally.Scheme, *tallyAddr),
+		append(tallyLBConfig.DialOptions(),
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+			grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+		)...,
 	)
 	if err != nil {
 		log.Fatalf("grpc dial: %v", err)
