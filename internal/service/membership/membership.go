@@ -2,6 +2,7 @@ package membership
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 
 	"github.com/w-h-a/tally/internal/client/consensus"
@@ -63,13 +64,15 @@ func (s *Service) handleJoin(event discovery.MemberEvent) {
 	defer span.End()
 
 	if err := s.consensus.AddVoter(ctx, event.ID, event.Addr); err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-		slog.WarnContext(ctx, "membership: add voter failed",
-			"node_id", event.ID,
-			"node_addr", event.Addr,
-			"error", err,
-		)
+		if !errors.Is(err, consensus.ErrNotLeader) {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			slog.WarnContext(ctx, "membership: add voter failed",
+				"node_id", event.ID,
+				"node_addr", event.Addr,
+				"error", err,
+			)
+		}
 		return
 	}
 }
@@ -83,13 +86,15 @@ func (s *Service) handleLeave(event discovery.MemberEvent) {
 	defer span.End()
 
 	if err := s.consensus.RemoveServer(ctx, event.ID); err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-		slog.WarnContext(ctx, "membership: remove server failed",
-			"node_id", event.ID,
-			"node_addr", event.Addr,
-			"error", err,
-		)
+		if !errors.Is(err, consensus.ErrNotLeader) {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			slog.WarnContext(ctx, "membership: remove server failed",
+				"node_id", event.ID,
+				"node_addr", event.Addr,
+				"error", err,
+			)
+		}
 		return
 	}
 }
