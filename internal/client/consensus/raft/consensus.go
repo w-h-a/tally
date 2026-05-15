@@ -216,6 +216,10 @@ func (c *raftConsensus) AddVoter(ctx context.Context, id string, addr string) er
 
 	future := c.raft.AddVoter(hraft.ServerID(id), hraft.ServerAddress(addr), 0, 0)
 	if err := future.Error(); err != nil {
+		if errors.Is(err, hraft.ErrNotLeader) {
+			span.SetAttributes(attribute.Bool("consensus.not_leader", true))
+			return consensus.ErrNotLeader
+		}
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 		return err
@@ -234,6 +238,10 @@ func (c *raftConsensus) RemoveServer(ctx context.Context, id string) error {
 
 	future := c.raft.RemoveServer(hraft.ServerID(id), 0, 0)
 	if err := future.Error(); err != nil {
+		if errors.Is(err, hraft.ErrNotLeader) {
+			span.SetAttributes(attribute.Bool("consensus.not_leader", true))
+			return consensus.ErrNotLeader
+		}
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 		return err
