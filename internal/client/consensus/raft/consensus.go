@@ -283,10 +283,8 @@ func (c *raftConsensus) GetServers(ctx context.Context) ([]*api.Server, error) {
 
 // State returns the current Raft state as a string:
 // "Leader", "Follower", "Candidate", or "Shutdown".
-func (c *raftConsensus) State(ctx context.Context) string {
-	_, span := c.tracer.Start(ctx, "consensus.State")
-	defer span.End()
-
+// No span: this is a trivial getter called on every health probe.
+func (c *raftConsensus) State(_ context.Context) string {
 	return c.raft.State().String()
 }
 
