@@ -236,7 +236,10 @@ func main() {
 		<-grpcDone
 	}
 
-	// 2. Leadership transfer if leader
+	// 2. Stop membership loop
+	membershipSvc.Stop(shutdownCtx)
+
+	// 3. Leadership transfer if leader
 	leadershipTransferred := false
 	if cons.State(shutdownCtx) == "Leader" {
 		if err := cons.LeadershipTransfer(shutdownCtx); err != nil {
@@ -246,21 +249,21 @@ func main() {
 		}
 	}
 
-	// 3. Leave discovery cluster
+	// 4. Leave discovery cluster
 	discoveryLeft := true
 	if err := membershipSvc.Close(shutdownCtx); err != nil {
 		slog.Error("membership close", "error", err)
 		discoveryLeft = false
 	}
 
-	// 4. Close distributed log
+	// 5. Close distributed log
 	logClosed := true
 	if err := logSvc.Close(shutdownCtx); err != nil {
 		slog.Error("log close", "error", err)
 		logClosed = false
 	}
 
-	// 5. HTTP shutdown
+	// 6. HTTP shutdown
 	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("http shutdown", "error", err)
 	}

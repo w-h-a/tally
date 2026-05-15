@@ -20,6 +20,8 @@ type Service struct {
 	discovery discovery.Discovery
 	consensus consensus.Consensus
 	tracer    trace.Tracer
+	stop      chan struct{}
+	done      chan struct{}
 }
 
 func New(d discovery.Discovery, c consensus.Consensus) *Service {
@@ -27,30 +29,52 @@ func New(d discovery.Discovery, c consensus.Consensus) *Service {
 		discovery: d,
 		consensus: c,
 		tracer:    otel.Tracer("tally/internal/service/membership"),
+		stop:      make(chan struct{}),
+		done:      make(chan struct{}),
 	}
 }
 
 // Start launches the background event loop that reads discovery events
 // and updates consensus voter membership. The routine exits when the
-// Events channel closes.
+// Events channel closes or Stop is called.
 func (s *Service) Start() {
 	go s.eventLoop()
 }
 
-// Close leaves the discovery cluster. This closes the Events channel,
-// causing the event loop to exit. It does NOT close Consensus. DistributedLog
-// owns that lifecycle.
+// Stop signals the event loop to stop processing new events and waits
+// for any in-flight handler to complete. Call this before leadership
+// transfer to ensure no membership commits are in-flight.
+func (s *Service) Stop(ctx context.Context) {
+	close(s.stop)
+	select {
+	case <-s.done:
+	case <-ctx.Done():
+	}
+}
+
+// Close leaves the discovery cluster. It does NOT close Consensus.
+// DistributedLog owns that lifecycle.
 func (s *Service) Close(ctx context.Context) error {
 	return s.discovery.Leave(ctx)
 }
 
 func (s *Service) eventLoop() {
-	for event := range s.discovery.Events() {
-		switch event.EventType {
-		case discovery.Join:
-			s.handleJoin(event)
-		case discovery.Leave:
-			s.handleLeave(event)
+	defer close(s.done)
+
+	for {
+		select {
+		case <-s.stop:
+			return
+		case event, ok := <-s.discovery.Events():
+			if !ok {
+				return
+			}
+			switch event.EventType {
+			case discovery.Join:
+				s.handleJoin(event)
+			case discovery.Leave:
+				s.handleLeave(event)
+			}
 		}
 	}
 }
